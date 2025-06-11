@@ -99,42 +99,73 @@ class TelegramParser:
             return {"status": "error", "message": f"Ошибка отправки кода: {str(e)}"}
     
     async def verify_phone_code(self, phone_number: str, phone_code: str, phone_code_hash: str):
-        """Подтвердить код из SMS"""
-        print(f"🔐 Начинаем верификацию кода для номера: {phone_number}")
-        print(f"📱 Код: {phone_code}, Hash: {phone_code_hash[:10]}...")
-        
+        """Проверка кода подтверждения"""
         try:
-            print("🔌 Проверяем подключение клиента...")
+            if not self.client:
+                await self.initialize_client()
+            
+            # Очищаем кэш для проверки авторизации
+            self.clear_auth_cache()
+            
+            print(f"📱 Проверяем код {phone_code} для номера {phone_number}")
+            
+            # Убеждаемся, что клиент подключен
             if not self.client.is_connected:
-                print("🔗 Переподключаемся к Telegram...")
+                print("🔌 Подключаемся к Telegram...")
                 await self.client.connect()
-                print("✅ Переподключение успешно")
-            else:
-                print("ℹ️ Клиент уже подключен")
+            
+            # Увеличиваем timeout для подписания
+            try:
+                # Подписываем код с расширенным timeout
+                signed_in = await asyncio.wait_for(
+                    self.client.sign_in(phone_number, phone_code_hash, phone_code),
+                    timeout=30.0  # Увеличен timeout до 30 секунд
+                )
                 
-            print(f"🔑 Выполняем sign_in...")
-            await self.client.sign_in(phone_number, phone_code_hash, phone_code)
-            print("✅ sign_in выполнен успешно")
-            
-            # Очищаем кэш авторизации для принудительной проверки
-            print("🗑️ Очищаем кэш авторизации...")
-            self._auth_cache = None
-            self._auth_cache_time = None
-            
-            print("🎉 Авторизация завершена успешно")
-            return {"status": "success", "message": "Успешная авторизация"}
+                print(f"✅ Успешная авторизация пользователя: {signed_in.first_name}")
+                
+                # Проверяем авторизацию
+                if await self.is_authorized():
+                    print("✅ Авторизация подтверждена")
+                    return {
+                        "status": "success",
+                        "message": "Код подтвержден успешно",
+                        "user_info": {
+                            "first_name": signed_in.first_name,
+                            "last_name": signed_in.last_name,
+                            "phone_number": signed_in.phone_number
+                        }
+                    }
+                else:
+                    print("❌ Не удалось подтвердить авторизацию")
+                    return {"status": "error", "message": "Не удалось подтвердить авторизацию"}
+                
+            except asyncio.TimeoutError:
+                print("⏱️ Timeout при проверке кода")
+                return {"status": "error", "message": "Время ожидания истекло. Попробуйте еще раз."}
+                
+        except PhoneCodeExpired:
+            print("⏱️ Код истек")
+            return {"status": "error", "message": "Код истёк. Запросите новый код."}
+        except PhoneCodeInvalid:
+            print("❌ Неверный код")
+            return {"status": "error", "message": "Неверный код. Проверьте и попробуйте еще раз."}
         except SessionPasswordNeeded:
-            print("🔒 Требуется пароль двухфакторной аутентификации")
-            return {"status": "need_password", "message": "Требуется двухфакторная аутентификация"}
-        except (PhoneCodeInvalid, PhoneCodeExpired) as e:
-            print(f"❌ Неверный или истёкший код: {str(e)}")
-            if "PHONE_CODE_EXPIRED" in str(e):
-                return {"status": "code_expired", "message": "Код истёк. Запросите новый код."}
-            return {"status": "error", "message": f"Неверный код: {str(e)}"}
+            print("🔐 Требуется двухфакторная аутентификация")
+            return {"status": "password_required", "message": "Требуется пароль двухфакторной аутентификации"}
         except Exception as e:
-            print(f"❌ Общая ошибка верификации: {str(e)}")
-            print(f"🔍 Тип ошибки: {type(e).__name__}")
-            return {"status": "error", "message": f"Ошибка верификации: {str(e)}"}
+            error_message = str(e)
+            print(f"❌ Ошибка проверки кода: {error_message}")
+            
+            # Специальная обработка для разных типов ошибок
+            if "PHONE_CODE_EXPIRED" in error_message:
+                return {"status": "error", "message": "Код истёк. Запросите новый код."}
+            elif "PHONE_CODE_INVALID" in error_message:
+                return {"status": "error", "message": "Неверный код. Проверьте и попробуйте еще раз."}
+            elif "SESSION_PASSWORD_NEEDED" in error_message:
+                return {"status": "password_required", "message": "Требуется пароль двухфакторной аутентификации"}
+            else:
+                return {"status": "error", "message": f"Ошибка: {error_message}"}
     
     async def verify_password(self, password: str):
         """Подтвердить пароль двухфакторной аутентификации"""
