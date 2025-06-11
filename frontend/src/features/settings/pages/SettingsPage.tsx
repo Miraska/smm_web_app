@@ -5,7 +5,8 @@ import { ThemeToggle } from '../../../components/ThemeToggle';
 import { LightThemeDemo } from '../../../components/LightThemeDemo';
 import axios from 'axios';
 
-const API_BASE_URL = 'http://localhost:8000';
+// Используем относительные пути
+const API_BASE_URL = '';
 
 export const SettingsPage: React.FC = () => {
   const { authStatus, logout } = useAuth();

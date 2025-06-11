@@ -18,7 +18,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 5000);
         
-        const response = await fetch('http://localhost:8000/api/telegram/status', {
+        const response = await fetch('/api/telegram/status', {
           method: 'GET',
           signal: controller.signal,
         });

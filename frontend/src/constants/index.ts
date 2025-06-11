@@ -1,5 +1,6 @@
 // API Configuration
-export const API_BASE_URL = 'http://localhost:8000';
+// Используем относительные пути, nginx будет проксировать /api запросы на backend
+export const API_BASE_URL = '';
 
 // Routes
 export const API_ROUTES = {

@@ -21,7 +21,8 @@ type ViewMode = 'list' | 'telegram' | 'grid' | 'compact';
 type SortBy = 'date' | 'views' | 'reactions' | 'title' | 'text_length' | 'message_id';
 type DateFilter = 'all' | 'today' | 'week' | 'month' | 'year';
 
-const API_BASE_URL = 'http://localhost:8000';
+// Используем относительные пути
+const API_BASE_URL = '';
 
 export default function PostsList({ 
   posts, 
