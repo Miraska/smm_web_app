@@ -1,8 +1,9 @@
 import React from 'react';
-import { Clock, Eye, Heart, MessageCircle, Share2, Play, Image as ImageIcon, File, ExternalLink, User } from 'lucide-react';
+import { Clock, Eye, Heart, MessageCircle, Share2, Play, Image as ImageIcon, File, ExternalLink } from 'lucide-react';
 import MediaRenderer from './MediaRenderer';
 import AlbumRenderer from './AlbumRenderer';
 import MediaDebugInfo from './MediaDebugInfo';
+import type { ViewMode } from '../types';
 
 interface Props { 
   post: any; 
@@ -10,7 +11,7 @@ interface Props {
   isSelected?: boolean;
   albumPosts?: any[]; // Дополнительные посты альбома
   showDebug?: boolean; // Для отладки медиа
-  viewMode?: 'grid' | 'list' | 'compact' | 'telegram'; // Режим отображения
+  viewMode?: ViewMode; // Режим отображения
 }
 
 export default function PostCard({ 
@@ -79,24 +80,24 @@ export default function PostCard({
 
     switch (viewMode) {
       case 'compact':
-        return baseClasses + ' rounded-xl shadow-tg p-4';
+        return baseClasses + ' rounded-lg sm:rounded-xl shadow-tg p-3 sm:p-4';
       case 'list':
-        return baseClasses + ' rounded-xl shadow-tg-md';
+        return baseClasses + ' rounded-lg sm:rounded-xl shadow-tg-md';
       case 'telegram':
-        return baseClasses + ' rounded-2xl shadow-tg-lg';
+        return baseClasses + ' rounded-xl sm:rounded-2xl shadow-tg-lg';
       default: // grid
-        return baseClasses + ' rounded-2xl shadow-tg-lg';
+        return baseClasses + ' rounded-xl sm:rounded-2xl shadow-tg-lg';
     }
   };
 
   const getLayoutClasses = () => {
     switch (viewMode) {
       case 'compact':
-        return 'flex gap-4 items-start';
+        return 'flex gap-3 sm:gap-4 items-start';
       case 'list':
-        return 'flex gap-6 p-6';
+        return 'flex gap-4 sm:gap-6 p-4 sm:p-6';
       case 'telegram':
-        return 'p-6 space-y-4';
+        return 'p-4 sm:p-6 space-y-3 sm:space-y-4';
       default: // grid
         return '';
     }
@@ -116,7 +117,7 @@ export default function PostCard({
         <div className={getLayoutClasses()}>
           {/* Media thumbnail */}
           {post.media_type && (
-            <div className="flex-shrink-0 w-16 h-16 bg-tg-gray-100 dark:bg-tg-dark-600 rounded-lg flex items-center justify-center overflow-hidden">
+            <div className="flex-shrink-0 w-12 h-12 sm:w-16 sm:h-16 bg-tg-gray-100 dark:bg-tg-dark-600 rounded-lg flex items-center justify-center overflow-hidden">
               {post.media_type && <MediaRenderer post={post} compact={true} />}
               {!post.media_type && getMediaIcon(post.media_type)}
             </div>
@@ -124,18 +125,18 @@ export default function PostCard({
 
           {/* Content */}
           <div className="flex-1 min-w-0">
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-2">
-                <div className="w-6 h-6 bg-gradient-to-br from-tg-blue-500 to-tg-purple-500 rounded-full flex items-center justify-center">
+            <div className="flex items-center justify-between mb-1 sm:mb-2">
+              <div className="flex items-center gap-1.5 sm:gap-2 min-w-0 flex-1">
+                <div className="w-5 h-5 sm:w-6 sm:h-6 bg-gradient-to-br from-tg-blue-500 to-tg-purple-500 rounded-full flex items-center justify-center flex-shrink-0">
                   <span className="text-white text-xs font-semibold">
                     {(post.channel_name || post.channel_title)?.charAt(0) || 'T'}
                   </span>
                 </div>
-                <span className="text-sm font-medium text-tg-blue-700 dark:text-tg-blue-300 truncate">
+                <span className="text-xs sm:text-sm font-medium text-tg-blue-700 dark:text-tg-blue-300 truncate">
                   {post.channel_name || post.channel_title || 'Telegram Channel'}
                 </span>
               </div>
-              <span className="text-xs text-tg-gray-500 flex-shrink-0">
+              <span className="text-xs text-tg-gray-500 flex-shrink-0 ml-2">
                 {formatDate(post.post_date || post.date || new Date().toISOString())}
               </span>
             </div>

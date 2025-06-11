@@ -3,6 +3,19 @@ from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean
 from sqlalchemy.orm import relationship
 from db import Base
 
+class User(Base):
+    """Пользователи системы с их Telegram сессиями"""
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String)  # Имя пользователя
+    phone_number = Column(String, unique=True)  # Номер телефона
+    telegram_id = Column(String, nullable=True)  # ID в Telegram после авторизации
+    session_file = Column(String, nullable=True)  # Путь к файлу сессии
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    last_login = Column(DateTime, nullable=True)
+
 class Source(Base):
     """Каналы-источники для парсинга"""
     __tablename__ = "sources"

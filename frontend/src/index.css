@@ -1,4 +1,9 @@
 @import "tailwindcss";
+@import "./styles/mobile.css";
+@import "./styles/mobile-utils.css";
+@import "./styles/album-slider.css";
+@import "./styles/light-theme-enhancements.css";
+@import "./styles/navigation-spacing.css";
 
 @layer base {
   /* Telegram-style scrollbars */
@@ -38,15 +43,25 @@
   }
 
   /* Smooth transitions for dark mode */
-  * {
-    transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+  *,
+  *::before,
+  *::after {
+    transition: background-color 0.3s cubic-bezier(0.4, 0, 0.2, 1), 
+                border-color 0.3s cubic-bezier(0.4, 0, 0.2, 1), 
+                color 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+                box-shadow 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   }
 
-  /* Body with Telegram-style gradients */
+  /* Body with enhanced gradients */
   body {
     min-height: 100vh;
-    background: linear-gradient(135deg, #f0f9ff 0%, #ffffff 50%, #faf5ff 100%);
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    /* Mobile optimization */
+    -webkit-text-size-adjust: 100%;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    /* Disable pull-to-refresh */
+    overscroll-behavior-y: contain;
   }
 
   .dark body {
@@ -66,7 +81,73 @@
 }
 
 @layer components {
+  /* Lucide React icons fix */
+  svg[data-lucide] {
+    stroke: currentColor !important;
+    fill: none !important;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    display: inline-block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+  }
+
+  /* Ensure icons are visible in active states */
+  button:active svg[data-lucide],
+  button.active svg[data-lucide],
+  .active svg[data-lucide] {
+    stroke: currentColor !important;
+    fill: none !important;
+    display: inline-block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+  }
+
+  /* Navigation icons specific fix */
+  nav button svg[data-lucide] {
+    stroke: currentColor !important;
+    fill: none !important;
+    display: inline-block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    pointer-events: none;
+    transform-origin: center;
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
+  }
+
+  /* Prevent icon flickering during transitions */
+  .transition-transform svg[data-lucide] {
+    will-change: transform;
+    transform-style: preserve-3d;
+  }
+
+  /* Dark mode icon fixes */
+  .dark svg[data-lucide] {
+    stroke: currentColor !important;
+    fill: none !important;
+  }
+
+  /* Ensure proper color inheritance */
+  .text-blue-600 svg[data-lucide],
+  .dark .text-blue-400 svg[data-lucide] {
+    stroke: currentColor !important;
+  }
+
   /* Input focus effects */
+  .tg-input {
+    color: #1f2937 !important;
+    font-weight: 500;
+    transition: all 0.2s ease;
+  }
+
+  .dark .tg-input {
+    color: #f9fafb !important;
+    background-color: #1f2937;
+    border-color: #374151;
+  }
+
   .tg-input:focus {
     outline: none;
     box-shadow: 0 0 0 2px rgba(14, 165, 233, 0.2);
@@ -74,38 +155,86 @@
     transition: all 0.2s ease;
   }
 
-  /* Button hover effects */
-  .tg-button:hover {
+  .dark .tg-input:focus {
+    border-color: #0ea5e9;
+    background-color: #111827;
+  }
+
+  .tg-input::placeholder {
+    color: #9ca3af !important;
+    font-weight: 400;
+  }
+
+  .dark .tg-input::placeholder {
+    color: #6b7280 !important;
+  }
+
+  /* Enhanced button effects */
+  .tg-button {
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  :not(.dark) .tg-button:hover {
+    transform: translateY(-2px);
+    box-shadow: 
+      0 12px 32px -8px rgba(59, 130, 246, 0.25),
+      0 6px 16px -4px rgba(0, 0, 0, 0.1);
+  }
+
+  .dark .tg-button:hover {
     transform: translateY(-1px);
-    box-shadow: 0 8px 25px -8px rgba(0, 0, 0, 0.3);
+    box-shadow: 0 8px 25px -8px rgba(0, 0, 0, 0.4);
   }
 
   .tg-button:active {
     transform: translateY(0);
   }
 
-  /* Card hover effects */
+  /* Enhanced card effects */
   .tg-card {
-    background: white;
     border-radius: 1rem;
-    box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
-    border: 1px solid #e0f2fe;
-    transition: all 0.3s ease;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   }
 
+  /* Light theme cards */
+  :not(.dark) .tg-card {
+    background: linear-gradient(145deg, 
+      rgba(255, 255, 255, 0.95) 0%, 
+      rgba(248, 250, 252, 0.9) 100%
+    );
+    border: 1px solid rgba(226, 232, 240, 0.6);
+    box-shadow: 
+      0 2px 8px 0 rgba(0, 0, 0, 0.08),
+      0 1px 3px 0 rgba(0, 0, 0, 0.06),
+      inset 0 1px 0 0 rgba(255, 255, 255, 0.1);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+  }
+
+  :not(.dark) .tg-card:hover {
+    background: linear-gradient(145deg, 
+      rgba(255, 255, 255, 0.98) 0%, 
+      rgba(248, 250, 252, 0.95) 100%
+    );
+    box-shadow: 
+      0 20px 40px -10px rgba(0, 0, 0, 0.15),
+      0 10px 20px -5px rgba(0, 0, 0, 0.1),
+      inset 0 1px 0 0 rgba(255, 255, 255, 0.2);
+    border-color: rgba(59, 130, 246, 0.4);
+    transform: translateY(-4px) scale(1.01);
+  }
+
+  /* Dark theme cards */
   .dark .tg-card {
     background: #1e293b;
-    border-color: #334155;
-  }
-
-  .tg-card:hover {
-    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
-    border-color: #38bdf8;
-    transform: translateY(-2px);
+    border: 1px solid #334155;
+    box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.3), 0 1px 2px 0 rgba(0, 0, 0, 0.2);
   }
 
   .dark .tg-card:hover {
+    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.3), 0 10px 10px -5px rgba(0, 0, 0, 0.2);
     border-color: #0284c7;
+    transform: translateY(-2px);
   }
 
   /* Line clamp utilities */
@@ -331,5 +460,59 @@
 
   .text-responsive-xl {
     font-size: clamp(1.5rem, 4vw, 2.25rem);
+  }
+
+  /* Mobile touch improvements */
+  .touch-optimized {
+    min-height: 44px;
+    min-width: 44px;
+    touch-action: manipulation;
+  }
+
+  /* Prevent zoom on input focus on iOS */
+  input, select, textarea {
+    font-size: 16px;
+    -webkit-user-select: text;
+    user-select: text;
+  }
+
+  /* Better mobile scrolling */
+  .smooth-scroll {
+    -webkit-overflow-scrolling: touch;
+    scroll-behavior: smooth;
+  }
+
+  /* Mobile-safe viewport units */
+  .h-screen-mobile {
+    height: 100vh;
+    height: 100dvh; /* Dynamic viewport height for mobile */
+  }
+
+  .min-h-screen-mobile {
+    min-height: 100vh;
+    min-height: 100dvh;
+  }
+
+  /* Mobile gap utilities */
+  .gap-mobile {
+    gap: 0.75rem;
+  }
+
+  @media (max-width: 640px) {
+    .gap-mobile {
+      gap: 0.5rem;
+    }
+  }
+
+  /* Safe area padding for phones with notches */
+  .safe-area-inset {
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+
+  .safe-area-bottom {
+    padding-bottom: calc(env(safe-area-inset-bottom) + 1rem);
   }
 }

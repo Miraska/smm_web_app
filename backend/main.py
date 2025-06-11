@@ -1,4 +1,5 @@
 import os
+import asyncio
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, FileResponse
@@ -10,8 +11,9 @@ from datetime import datetime
 from dotenv import load_dotenv
 
 from db import engine, Base, get_session
-from models import Source, Post, SelectedPost
+from models import Source, Post, SelectedPost, User
 from telegram_parser import telegram_parser
+from multi_user_telegram import multi_user_manager
 
 load_dotenv()
 
@@ -65,19 +67,31 @@ Base.metadata.create_all(bind=engine)
 async def startup_event():
     """Инициализация при запуске приложения"""
     try:
+        # Инициализируем старый парсер для обратной совместимости
         await telegram_parser.initialize_client()
-        print("Telegram parser initialized")
+        print("🔧 Старый Telegram parser инициализирован (для совместимости)")
+        
+        print("🚀 Многопользовательский менеджер Telegram готов")
     except Exception as e:
-        print(f"Ошибка инициализации Telegram parser: {e}")
+        print(f"❌ Ошибка инициализации: {e}")
 
 @app.on_event("shutdown") 
 async def shutdown_event():
-    """Очистка при завершении работы"""
+    """Очистка при завершении работы - НЕ удаляем файлы сессий!"""
     try:
+        print("🔌 Завершаем работу приложения...")
+        
+        # Останавливаем старый парсер (для совместимости)
         await telegram_parser.stop()
-        print("Telegram parser stopped")
+        telegram_parser._auth_cache = None
+        telegram_parser._auth_cache_time = None
+        
+        # Останавливаем всех пользователей
+        await multi_user_manager.stop_all()
+        
+        print("✅ Все парсеры остановлены, сессии сохранены")
     except Exception as e:
-        print(f"Ошибка при остановке Telegram parser: {e}")
+        print(f"⚠️ Предупреждение при остановке: {e}")
 
 # Pydantic models
 class SourceCreate(BaseModel):
@@ -153,13 +167,24 @@ class PasswordVerification(BaseModel):
 
 # === ИСТОЧНИКИ (Sources) ===
 @app.get("/api/sources", response_model=List[SourceResponse])
-def get_sources(db: Session = Depends(get_session)):
-    """Получить список всех источников"""
-    sources = db.query(Source).filter(Source.is_active == True).all()
+def get_sources(search: str = None, db: Session = Depends(get_session)):
+    """Получить список всех источников с возможностью поиска"""
+    query = db.query(Source).filter(Source.is_active == True)
+    
+    if search:
+        # Поиск по названию канала, username или ID
+        search_pattern = f"%{search.lower()}%"
+        query = query.filter(
+            (Source.channel_name.ilike(search_pattern)) |
+            (Source.channel_username.ilike(search_pattern)) |
+            (Source.channel_id.ilike(search_pattern))
+        )
+    
+    sources = query.order_by(Source.added_at.desc()).all()
     return [SourceResponse.from_orm(source) for source in sources]
 
 @app.post("/api/sources", response_model=SourceResponse)
-def add_source(source: SourceCreate, db: Session = Depends(get_session)):
+async def add_source(source: SourceCreate, db: Session = Depends(get_session)):
     """Добавить новый источник"""
     # Проверяем, не существует ли уже такой канал
     existing = db.query(Source).filter(Source.channel_id == source.channel_id).first()
@@ -177,18 +202,271 @@ def add_source(source: SourceCreate, db: Session = Depends(get_session)):
     db.add(new_source)
     db.commit()
     db.refresh(new_source)
+    
     return SourceResponse.from_orm(new_source)
+
+async def parse_new_posts_for_source(channel_id: str, db: Session):
+    """Оптимизированный парсер новых постов для конкретного источника"""
+    try:
+        is_authorized = await telegram_parser.is_authorized()
+        if not is_authorized:
+            print(f"⚠️ Не авторизован в Telegram, пропускаем парсинг для {channel_id}")
+            return
+        
+        # Получаем последний пост для этого конкретного канала
+        last_post_in_channel = db.query(Post).filter(
+            Post.channel_id == channel_id
+        ).order_by(Post.post_date.desc()).first()
+        
+        last_message_id = last_post_in_channel.message_id if last_post_in_channel else 0
+        last_date = last_post_in_channel.post_date if last_post_in_channel else None
+        
+        print(f"📊 Оптимизированный автопарсинг {channel_id}: последний message_id={last_message_id}, дата={last_date}")
+        
+        # Умная проверка - парсим только новее последнего поста
+        check_limit = 15  # Проверяем 15 последних постов из канала
+        result = await telegram_parser.parse_channel_posts(
+            channel_id, 
+            limit=check_limit,
+            until_date=last_date  # Парсим только новее последнего поста в БД
+        )
+        
+        if result["status"] == "error":
+            print(f"❌ Ошибка парсинга канала {channel_id}: {result['message']}")
+            return
+        
+        posts_data = result.get("posts", [])
+        print(f"📝 Получено {len(posts_data)} постов для проверки из канала {channel_id}")
+        
+        # Фильтруем только действительно новые посты
+        new_posts_count = 0
+        max_new_posts = 10  # Ограничиваем количество новых постов
+        
+        for post_data in posts_data:
+            if new_posts_count >= max_new_posts:
+                break
+                
+            try:
+                message_id = post_data.get("message_id")
+                post_date = post_data.get("post_date")
+                
+                # Быстрая проверка по message_id - пропускаем старые
+                if message_id <= last_message_id:
+                    continue
+                
+                # Проверяем, не существует ли уже этот пост (для надежности)
+                existing_post = db.query(Post).filter(
+                    Post.channel_id == post_data["channel_id"],
+                    Post.message_id == message_id
+                ).first()
+                
+                if not existing_post:
+                    new_post = Post(**post_data)
+                    db.add(new_post)
+                    new_posts_count += 1
+                    print(f"  ✅ Добавлен новый пост: message_id={message_id}, дата={post_date}")
+                else:
+                    print(f"  ⚠️ Пост {message_id} уже существует в БД")
+                    
+            except Exception as e:
+                print(f"❌ Ошибка при сохранении поста {post_data.get('message_id', 'unknown')}: {e}")
+                continue
+        
+        if new_posts_count > 0:
+            try:
+                db.commit()
+                print(f"✅ Оптимизированный автопарсинг - добавлено {new_posts_count} новых постов для канала {channel_id}")
+            except Exception as e:
+                print(f"❌ Ошибка при коммите: {e}")
+                db.rollback()
+        else:
+            print(f"📭 Новых постов не найдено для канала {channel_id}")
+                
+    except Exception as e:
+        print(f"❌ Общая ошибка при оптимизированном парсинге канала {channel_id}: {e}")
 
 @app.delete("/api/sources/{source_id}")
 def remove_source(source_id: int, db: Session = Depends(get_session)):
-    """Удалить источник"""
+    """Удалить источник со всеми связанными данными"""
     source = db.query(Source).filter(Source.id == source_id).first()
     if not source:
         raise HTTPException(status_code=404, detail="Источник не найден")
     
-    source.is_active = False
-    db.commit()
-    return {"message": "Источник удален"}
+    channel_id = source.channel_id
+    channel_name = source.channel_name
+    
+    try:
+        # 1. Удаляем все отобранные посты связанные с этим каналом
+        # Сначала получаем ID постов этого канала
+        post_ids = db.query(Post.id).filter(Post.channel_id == channel_id).all()
+        post_ids_list = [post_id[0] for post_id in post_ids]
+        
+        # Подсчитываем количество отобранных постов для отчета
+        selected_count = db.query(SelectedPost).filter(SelectedPost.post_id.in_(post_ids_list)).count()
+        
+        # Удаляем отобранные посты одним запросом
+        db.query(SelectedPost).filter(SelectedPost.post_id.in_(post_ids_list)).delete(synchronize_session=False)
+        
+        # 2. Удаляем все посты этого канала
+        posts_count = db.query(Post).filter(Post.channel_id == channel_id).count()
+        db.query(Post).filter(Post.channel_id == channel_id).delete(synchronize_session=False)
+        
+        # 3. Удаляем сам источник
+        db.delete(source)
+        
+        # 4. Удаляем папку с медиафайлами канала
+        import os
+        import shutil
+        
+        media_path = os.path.abspath("../frontend/public/media")
+        
+        # Пробуем разные варианты названий папок
+        possible_folders = [
+            channel_id,
+            channel_id.replace('-', ''),
+            channel_id.replace('@', ''),
+            channel_id.replace('/', '_'),
+            channel_name.replace(' ', '_') if channel_name else None,
+        ]
+        
+        deleted_folders = []
+        freed_space = 0
+        
+        for folder_name in possible_folders:
+            if folder_name:
+                folder_path = os.path.join(media_path, folder_name)
+                if os.path.exists(folder_path) and os.path.isdir(folder_path):
+                    try:
+                        # Подсчитываем размер папки перед удалением
+                        folder_size = 0
+                        for dirpath, dirnames, filenames in os.walk(folder_path):
+                            for filename in filenames:
+                                filepath = os.path.join(dirpath, filename)
+                                try:
+                                    folder_size += os.path.getsize(filepath)
+                                except (OSError, FileNotFoundError):
+                                    pass
+                        
+                        # Удаляем папку
+                        shutil.rmtree(folder_path)
+                        deleted_folders.append(folder_name)
+                        freed_space += folder_size
+                        print(f"📁 Удалена папка медиа: {folder_path} ({folder_size / 1024 / 1024:.2f} MB)")
+                        
+                    except Exception as e:
+                        print(f"⚠️ Ошибка при удалении папки {folder_path}: {e}")
+        
+        # Коммитим изменения в базе данных
+        db.commit()
+        
+        return {
+            "message": f"Источник '{channel_name}' удален",
+            "details": {
+                "deleted_posts": posts_count,
+                "deleted_selected_posts": selected_count,
+                "deleted_media_folders": deleted_folders,
+                "freed_space_mb": round(freed_space / 1024 / 1024, 2)
+            }
+        }
+        
+    except Exception as e:
+        db.rollback()
+        print(f"❌ Ошибка при удалении источника: {e}")
+        raise HTTPException(status_code=500, detail=f"Ошибка при удалении источника: {str(e)}")
+
+@app.post("/api/sources/parse-all")
+async def parse_all_sources(db: Session = Depends(get_session)):
+    """Парсинг всех активных источников"""
+    is_authorized = await telegram_parser.is_authorized()
+    if not is_authorized:
+        raise HTTPException(status_code=401, detail="Не авторизован в Telegram")
+    
+    result = await telegram_parser.parse_all_sources_limited(db, limit=10)
+    if result["status"] == "error":
+        raise HTTPException(status_code=400, detail=result["message"])
+    return result
+
+@app.post("/api/sources/parse-new/{channel_id}")
+async def parse_new_source(channel_id: str, db: Session = Depends(get_session)):
+    """Оптимизированный быстрый парсинг для нового источника"""
+    print(f"🚀 Оптимизированный автопарсинг нового источника: {channel_id}")
+    
+    is_authorized = await telegram_parser.is_authorized()
+    if not is_authorized:
+        return {"message": "Не авторизован в Telegram", "new_posts": 0}
+    
+    try:
+        # Получаем последний пост из этого канала
+        last_post_in_channel = db.query(Post).filter(
+            Post.channel_id == channel_id
+        ).order_by(Post.post_date.desc()).first()
+        
+        last_message_id = last_post_in_channel.message_id if last_post_in_channel else 0
+        last_date = last_post_in_channel.post_date if last_post_in_channel else None
+        
+        print(f"📊 Последний пост в БД для канала {channel_id}: message_id={last_message_id}, дата={last_date}")
+        
+        # Парсим только новые посты
+        result = await telegram_parser.parse_channel_posts(
+            channel_id, 
+            limit=15,  # Проверяем больше постов для нового источника 
+            until_date=last_date  # Парсим только новее последнего поста в БД
+        )
+        
+        if result["status"] == "error":
+            return {"message": f"Ошибка парсинга: {result['message']}", "new_posts": 0}
+        
+        posts_data = result.get("posts", [])
+        new_posts_count = 0
+        
+        print(f"📝 Получено {len(posts_data)} постов для проверки")
+        
+        for post_data in posts_data:
+            message_id = post_data.get("message_id")
+            post_date = post_data.get("post_date")
+            
+            # Быстрая проверка по message_id - пропускаем старые
+            if message_id <= last_message_id:
+                continue
+            
+            # Быстрая проверка на дубликат в БД
+            existing_post = db.query(Post).filter(
+                Post.channel_id == post_data["channel_id"],
+                Post.message_id == message_id
+            ).first()
+            
+            if not existing_post:
+                try:
+                    new_post = Post(**post_data)
+                    db.add(new_post)
+                    new_posts_count += 1
+                    print(f"  ✅ Добавлен новый пост: message_id={message_id}, дата={post_date}")
+                except Exception as e:
+                    print(f"❌ Ошибка при сохранении поста {message_id}: {e}")
+                    continue
+            else:
+                print(f"  ⚠️ Пост {message_id} уже существует в БД")
+        
+        if new_posts_count > 0:
+            try:
+                db.commit()
+                print(f"✅ Добавлено {new_posts_count} новых постов для канала {channel_id}")
+            except Exception as e:
+                print(f"❌ Ошибка при коммите: {e}")
+                db.rollback()
+                new_posts_count = 0
+        else:
+            print(f"📭 Новых постов не найдено для канала {channel_id}")
+        
+        return {
+            "message": f"Оптимизированный автопарсинг завершен. Добавлено {new_posts_count} постов",
+            "new_posts": new_posts_count,
+            "optimization": "enabled"
+        }
+        
+    except Exception as e:
+        print(f"❌ Ошибка при оптимизированном автопарсинге канала {channel_id}: {e}")
+        return {"message": f"Ошибка: {str(e)}", "new_posts": 0}
 
 # === ПОСТЫ ===
 @app.get("/api/posts", response_model=List[PostResponse])
@@ -202,6 +480,43 @@ def get_posts(db: Session = Depends(get_session)):
     source_ids = [s.channel_id for s in active_sources]
     posts = db.query(Post).filter(Post.channel_id.in_(source_ids)).order_by(Post.post_date.desc()).all()
     return [PostResponse.from_orm(post) for post in posts]
+
+@app.get("/api/posts/paginated")
+def get_posts_paginated(
+    offset: int = 0, 
+    limit: int = 10, 
+    db: Session = Depends(get_session)
+):
+    """Получить посты с пагинацией"""
+    # Получаем активные источники
+    active_sources = db.query(Source).filter(Source.is_active == True).all()
+    if not active_sources:
+        return {"posts": [], "has_more": False, "total": 0}
+    
+    source_ids = [s.channel_id for s in active_sources]
+    
+    # Создаем базовый запрос
+    query = db.query(Post).filter(Post.channel_id.in_(source_ids))
+    
+    # Получаем общее количество постов
+    total_posts = query.count()
+    
+    # Получаем посты с пагинацией, сортировка по дате (новые сверху)
+    posts = query.order_by(Post.post_date.desc()).offset(offset).limit(limit).all()
+    
+    # Проверяем есть ли еще посты в БД
+    has_more = offset + len(posts) < total_posts
+    
+    print(f"📊 Пагинация: offset={offset}, limit={limit}, загружено={len(posts)}, всего={total_posts}, has_more={has_more}")
+    
+    return {
+        "posts": [PostResponse.from_orm(post) for post in posts],
+        "has_more": has_more,
+        "total": total_posts,
+        "offset": offset,
+        "limit": limit,
+        "loaded_count": len(posts)
+    }
 
 @app.post("/api/posts/select")
 def select_post(post_select: PostSelect, db: Session = Depends(get_session)):
@@ -268,45 +583,321 @@ def remove_selected_post(selected_post_id: int, db: Session = Depends(get_sessio
     db.commit()
     return {"message": "Пост удален из отобранных"}
 
+@app.delete("/api/posts/clear-all")
+async def clear_all_posts(db: Session = Depends(get_session)):
+    """Полная очистка всех постов из базы данных"""
+    try:
+        print("🛑 Безопасно завершаем Telegram клиент перед очисткой постов...")
+        # Безопасно завершаем Telegram клиент
+        try:
+            await telegram_parser.stop()
+        except Exception as stop_error:
+            print(f"⚠️ Предупреждение при остановке клиента: {stop_error}")
+        
+        # Очищаем кэш авторизации
+        telegram_parser.clear_auth_cache()
+        print("🗑️ Кэш авторизации очищен")
+        
+        # Подсчитываем количество постов перед удалением
+        total_posts = db.query(Post).count()
+        total_selected = db.query(SelectedPost).count()
+        
+        print(f"📊 Найдено {total_posts} постов и {total_selected} отобранных постов для удаления")
+        
+        # Удаляем все отобранные посты
+        db.query(SelectedPost).delete()
+        
+        # Удаляем все посты
+        db.query(Post).delete()
+        
+        db.commit()
+        
+        print(f"✅ Удаление завершено: {total_posts} постов и {total_selected} отобранных постов")
+        
+        return {
+            "status": "success",
+            "message": f"Удалено {total_posts} постов и {total_selected} отобранных постов",
+            "deleted_posts": total_posts,
+            "deleted_selected": total_selected
+        }
+        
+    except Exception as e:
+        db.rollback()
+        print(f"❌ Ошибка при очистке постов: {e}")
+        return {
+            "status": "error",
+            "message": f"Ошибка при очистке постов: {str(e)}"
+        }
+
 # === TELEGRAM СЕССИЯ ===
 @app.get("/api/telegram/status")
-async def get_telegram_status():
-    """Проверить статус авторизации в Telegram"""
-    is_authorized = await telegram_parser.is_authorized()
-    return {"authorized": is_authorized}
+async def get_telegram_status(db: Session = Depends(get_session)):
+    """Проверить статус авторизации текущего пользователя"""
+    try:
+        # Получаем парсер для текущего пользователя
+        current_parser = await multi_user_manager.get_current_user_parser(db)
+        
+        if not current_parser:
+            return {
+                "authorized": False,
+                "message": "Нет активных пользователей",
+                "timestamp": datetime.now().isoformat()
+            }
+        
+        # Проверяем авторизацию
+        current_parser._auth_cache = None
+        current_parser._auth_cache_time = None
+        is_authorized = await current_parser.is_authorized()
+        
+        # Диагностическая информация
+        session_file = f"sessions/{current_parser.session_name}.session"
+        session_exists = os.path.exists(session_file)
+        client_connected = current_parser.client.is_connected if current_parser.client else False
+        client_initialized = current_parser._initialized
+        
+        # Информация о текущем пользователе
+        current_user = db.query(User).filter(
+            User.is_active == True,
+            User.last_login.isnot(None)
+        ).order_by(User.last_login.desc()).first()
+        
+        user_info = None
+        if current_user:
+            user_info = {
+                "name": current_user.name,
+                "phone_number": current_user.phone_number,
+                "last_login": current_user.last_login.isoformat() if current_user.last_login else None
+            }
+        
+        return {
+            "authorized": is_authorized,
+            "current_user": user_info,
+            "session_file_exists": session_exists,
+            "client_connected": client_connected,
+            "client_initialized": client_initialized,
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        print(f"❌ Ошибка проверки статуса Telegram: {e}")
+        return {
+            "authorized": False,
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }
 
-@app.get("/api/telegram/channels")
-async def get_telegram_channels():
-    """Получить список каналов пользователя из Telegram"""
-    result = await telegram_parser.get_user_channels()
-    if result["status"] == "error":
-        raise HTTPException(status_code=400, detail=result["message"])
-    return result
+@app.get("/api/users")
+async def get_users(db: Session = Depends(get_session)):
+    """Получить список всех пользователей"""
+    users = db.query(User).order_by(User.last_login.desc()).all()
+    return [
+        {
+            "id": user.id,
+            "name": user.name,
+            "phone_number": user.phone_number,
+            "is_active": user.is_active,
+            "last_login": user.last_login.isoformat() if user.last_login else None,
+            "created_at": user.created_at.isoformat()
+        }
+        for user in users
+    ]
 
 @app.post("/api/telegram/send-code")
 async def send_phone_code(phone_request: PhoneRequest):
     """Отправить код подтверждения на телефон"""
-    result = await telegram_parser.send_phone_code(phone_request.phone_number)
-    if result["status"] == "error":
-        raise HTTPException(status_code=400, detail=result["message"])
-    return result
+    try:
+        result = await multi_user_manager.send_phone_code(phone_request.phone_number)
+        if result["status"] == "error":
+            error_message = result["message"]
+            
+            # Специальная обработка FLOOD_WAIT ошибок
+            if "FLOOD_WAIT" in error_message:
+                # Извлекаем время ожидания из сообщения
+                import re
+                wait_match = re.search(r'wait of (\d+) seconds', error_message)
+                if wait_match:
+                    wait_seconds = int(wait_match.group(1))
+                    wait_minutes = wait_seconds // 60
+                    wait_hours = wait_minutes // 60
+                    
+                    if wait_hours > 0:
+                        wait_text = f"{wait_hours} час(ов) {wait_minutes % 60} минут"
+                    else:
+                        wait_text = f"{wait_minutes} минут"
+                    
+                    friendly_message = (
+                        f"Telegram временно заблокировал отправку кодов на ваш номер. "
+                        f"Нужно подождать {wait_text}. "
+                        f"Это происходит при частых запросах авторизации. "
+                        f"Попробуйте позже или используйте другой номер телефона."
+                    )
+                    
+                    raise HTTPException(
+                        status_code=429,  # Too Many Requests
+                        detail={
+                            "error": "FLOOD_WAIT",
+                            "message": friendly_message,
+                            "wait_seconds": wait_seconds,
+                            "wait_minutes": wait_minutes,
+                            "wait_hours": wait_hours if wait_hours > 0 else None
+                        }
+                    )
+            
+            raise HTTPException(status_code=400, detail=result["message"])
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        error_message = str(e)
+        if "FLOOD_WAIT" in error_message:
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "error": "FLOOD_WAIT", 
+                    "message": "Telegram временно заблокировал отправку кодов. Попробуйте позже."
+                }
+            )
+        raise HTTPException(status_code=500, detail=f"Неожиданная ошибка: {error_message}")
 
 @app.post("/api/telegram/verify-code")
-async def verify_phone_code(verification: CodeVerification):
+async def verify_phone_code(verification: CodeVerification, db: Session = Depends(get_session)):
     """Подтвердить код из SMS"""
-    result = await telegram_parser.verify_phone_code(
+    result = await multi_user_manager.verify_phone_code(
         verification.phone_number,
         verification.phone_code,
-        verification.phone_code_hash
+        verification.phone_code_hash,
+        db
     )
     return result
 
 @app.post("/api/telegram/verify-password")
-async def verify_password(password_verification: PasswordVerification):
+async def verify_password(password_verification: PasswordVerification, db: Session = Depends(get_session)):
     """Подтвердить пароль двухфакторной аутентификации"""
-    result = await telegram_parser.verify_password(password_verification.password)
+    # Нужно получить номер телефона текущего пользователя (можно добавить в запрос)
+    # Пока используем последнего неактивного пользователя, который проходил авторизацию
+    current_user = db.query(User).order_by(User.created_at.desc()).first()
+    if not current_user:
+        raise HTTPException(status_code=400, detail="Пользователь не найден")
+    
+    result = await multi_user_manager.verify_password(
+        current_user.phone_number,
+        password_verification.password,
+        db
+    )
     if result["status"] == "error":
         raise HTTPException(status_code=400, detail=result["message"])
+    return result
+
+@app.post("/api/telegram/logout")
+async def logout(db: Session = Depends(get_session)):
+    """Выход текущего пользователя из системы"""
+    try:
+        # Получаем текущего активного пользователя
+        current_user = db.query(User).filter(
+            User.is_active == True,
+            User.last_login.isnot(None)
+        ).order_by(User.last_login.desc()).first()
+        
+        if not current_user:
+            return {"status": "success", "message": "Нет активных пользователей для выхода"}
+        
+        result = await multi_user_manager.logout_user(current_user.phone_number, db)
+        return result
+        
+    except Exception as e:
+        print(f"❌ Ошибка при выходе: {e}")
+        return {"status": "error", "message": f"Ошибка выхода: {str(e)}"}
+
+@app.post("/api/telegram/switch-user/{user_id}")
+async def switch_user(user_id: int, db: Session = Depends(get_session)):
+    """Переключение на другого пользователя"""
+    try:
+        # Деактивируем текущих пользователей
+        db.query(User).filter(User.is_active == True).update({"is_active": False})
+        
+        # Активируем выбранного пользователя
+        target_user = db.query(User).filter(User.id == user_id).first()
+        if not target_user:
+            raise HTTPException(status_code=404, detail="Пользователь не найден")
+        
+        target_user.is_active = True
+        target_user.last_login = datetime.utcnow()
+        db.commit()
+        
+        # Проверяем авторизацию
+        parser = await multi_user_manager.get_parser_for_user(target_user.phone_number)
+        is_authorized = await parser.is_authorized()
+        
+        return {
+            "status": "success",
+            "message": f"Переключено на пользователя {target_user.name}",
+            "authorized": is_authorized,
+            "user": {
+                "name": target_user.name,
+                "phone_number": target_user.phone_number
+            }
+        }
+        
+    except Exception as e:
+        print(f"❌ Ошибка переключения пользователя: {e}")
+        raise HTTPException(status_code=400, detail=f"Ошибка переключения: {str(e)}")
+
+# Совместимость: старые эндпоинты
+@app.post("/api/telegram/clear-auth-cache")
+async def clear_auth_cache():
+    """Очистить кэш авторизации для принудительной проверки"""
+    telegram_parser._auth_cache = None
+    telegram_parser._auth_cache_time = None
+    return {"status": "success", "message": "Кэш авторизации очищен"}
+
+@app.post("/api/telegram/clear-session")
+async def clear_session():
+    """Очистить файл сессии и переинициализировать клиент"""
+    try:
+        await telegram_parser.stop()
+        session_file = f"sessions/smm_bot_session.session"
+        if os.path.exists(session_file):
+            os.remove(session_file)
+            print(f"✅ Файл сессии удален: {session_file}")
+        
+        telegram_parser._initialized = False
+        telegram_parser._auth_cache = None
+        telegram_parser._auth_cache_time = None
+        await telegram_parser.initialize_client()
+        
+        return {"status": "success", "message": "Сессия очищена и клиент переинициализирован"}
+    except Exception as e:
+        return {"status": "error", "message": f"Ошибка очистки сессии: {str(e)}"}
+
+@app.get("/api/telegram/channels")
+async def get_telegram_channels(search: str = None, db: Session = Depends(get_session)):
+    """Получить список каналов текущего пользователя"""
+    # Получаем парсер для текущего пользователя
+    current_parser = await multi_user_manager.get_current_user_parser(db)
+    
+    if not current_parser:
+        raise HTTPException(status_code=401, detail="Нет авторизованных пользователей")
+    
+    result = await current_parser.get_user_channels()
+    if result["status"] == "error":
+        raise HTTPException(status_code=400, detail=result["message"])
+    
+    # Фильтрация по поиску
+    if search and result.get("channels"):
+        search_lower = search.lower()
+        filtered_channels = []
+        
+        for channel in result["channels"]:
+            title = channel.get("title", "").lower()
+            username = channel.get("username", "").lower() if channel.get("username") else ""
+            
+            if (search_lower in title or 
+                search_lower in username or 
+                search_lower in str(channel.get("id", ""))):
+                filtered_channels.append(channel)
+        
+        result["channels"] = filtered_channels
+        result["message"] = f"Найдено {len(filtered_channels)} каналов по запросу '{search}'"
+    
     return result
 
 # === ПАРСИНГ ===
@@ -318,6 +909,14 @@ async def parse_channels(db: Session = Depends(get_session)):
         raise HTTPException(status_code=400, detail=result["message"])
     return result
 
+@app.post("/api/parse-limited")
+async def parse_channels_limited(db: Session = Depends(get_session)):
+    """Запустить ограниченный парсинг (только 5 постов)"""
+    result = await telegram_parser.parse_all_sources_limited(db, limit=5)
+    if result["status"] == "error":
+        raise HTTPException(status_code=400, detail=result["message"])
+    return result
+
 @app.post("/api/parse/channel/{channel_id}")
 async def parse_single_channel(channel_id: str, db: Session = Depends(get_session)):
     """Парсинг одного конкретного канала"""
@@ -325,7 +924,7 @@ async def parse_single_channel(channel_id: str, db: Session = Depends(get_sessio
     if not is_authorized:
         raise HTTPException(status_code=401, detail="Не авторизован в Telegram")
     
-    result = await telegram_parser.parse_channel_posts(channel_id, limit=50)
+    result = await telegram_parser.parse_channel_posts(channel_id, limit=10)
     if result["status"] == "error":
         raise HTTPException(status_code=400, detail=result["message"])
     
@@ -448,6 +1047,172 @@ async def redownload_media(channel_id: str, message_id: int, db: Session = Depen
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ошибка при скачивании медиа: {str(e)}")
 
+@app.post("/api/cleanup-media")
+async def cleanup_media(db: Session = Depends(get_session)):
+    """Полная очистка всех медиафайлов"""
+    import os
+    import shutil
+    
+    try:
+        print("🛑 Безопасно завершаем Telegram клиент перед очисткой медиа...")
+        # Безопасно завершаем Telegram клиент
+        try:
+            await telegram_parser.stop()
+        except Exception as stop_error:
+            print(f"⚠️ Предупреждение при остановке клиента: {stop_error}")
+        
+        # Очищаем кэш авторизации
+        telegram_parser.clear_auth_cache()
+        print("🗑️ Кэш авторизации очищен")
+        # Получаем директорию media
+        media_dir = "../frontend/public/media"
+        if not os.path.exists(media_dir):
+            return {"status": "success", "message": "Директория media не существует", "deleted_files": 0, "freed_space": 0}
+        
+        deleted_files = 0
+        freed_space = 0
+        
+        # Проходим по всем поддиректориям каналов
+        for channel_dir in os.listdir(media_dir):
+            channel_path = os.path.join(media_dir, channel_dir)
+            if not os.path.isdir(channel_path):
+                continue
+            
+            # Удаляем всю директорию канала со всеми файлами
+            try:
+                # Подсчитываем размер директории перед удалением
+                for root, dirs, files in os.walk(channel_path):
+                    for file in files:
+                        file_path = os.path.join(root, file)
+                        try:
+                            file_size = os.path.getsize(file_path)
+                            freed_space += file_size
+                            deleted_files += 1
+                        except:
+                            pass
+                
+                # Удаляем всю директорию
+                shutil.rmtree(channel_path)
+                print(f"Удалена директория канала: {channel_path}")
+                
+            except Exception as e:
+                print(f"Ошибка при удалении директории {channel_path}: {e}")
+        
+        # Форматируем размер в человекочитаемый вид
+        def format_size(size_bytes):
+            if size_bytes < 1024:
+                return f"{size_bytes} B"
+            elif size_bytes < 1024**2:
+                return f"{size_bytes/1024:.1f} KB"
+            elif size_bytes < 1024**3:
+                return f"{size_bytes/(1024**2):.1f} MB"
+            else:
+                return f"{size_bytes/(1024**3):.1f} GB"
+        
+        return {
+            "status": "success",
+            "message": f"Полная очистка завершена: удалено {deleted_files} файлов, освобождено {format_size(freed_space)}",
+            "deleted_files": deleted_files,
+            "freed_space": freed_space,
+            "freed_space_formatted": format_size(freed_space)
+        }
+        
+    except Exception as e:
+        print(f"Ошибка при очистке медиафайлов: {e}")
+        return {
+            "status": "error",
+            "message": f"Ошибка при очистке медиафайлов: {str(e)}",
+            "deleted_files": 0,
+            "freed_space": 0
+        }
+
+@app.post("/api/posts/check-new")
+async def check_and_parse_new_posts(db: Session = Depends(get_session)):
+    """Обновленный эндпоинт с оптимизацией - используется frontend"""
+    # Просто вызываем оптимизированную версию
+    return await check_and_parse_new_posts_optimized(db)
+
+@app.post("/api/posts/parse-more")
+async def parse_more_posts(limit: int = 5, db: Session = Depends(get_session)):
+    """Спарсить еще несколько старых постов со всех активных источников"""
+    # Получаем парсер для текущего пользователя
+    current_parser = await multi_user_manager.get_current_user_parser(db)
+    
+    if not current_parser:
+        raise HTTPException(status_code=401, detail="Нет авторизованных пользователей")
+    
+    is_authorized = await current_parser.is_authorized()
+    if not is_authorized:
+        raise HTTPException(status_code=401, detail="Пользователь не авторизован в Telegram")
+    
+    # Получаем активные источники
+    sources = db.query(Source).filter(Source.is_active == True).all()
+    if not sources:
+        return {"message": "Нет активных источников для парсинга", "new_posts": 0}
+    
+    total_posts = 0
+    results = []
+    
+    for source in sources:
+        try:
+            # Получаем количество постов в БД для этого канала
+            posts_count = db.query(Post).filter(Post.channel_id == source.channel_id).count()
+            
+            # Парсим с offset равным количеству постов в БД, без ограничений по дате
+            result = await current_parser.parse_channel_posts(source.channel_id, limit=limit, offset=posts_count, until_date=None)
+            
+            if result["status"] == "success":
+                posts_data = result["posts"]
+                new_posts = 0
+                
+                for post_data in posts_data:
+                    try:
+                        # Проверяем, не существует ли уже этот пост
+                        existing_post = db.query(Post).filter(
+                            Post.channel_id == post_data["channel_id"],
+                            Post.message_id == post_data["message_id"]
+                        ).first()
+                        
+                        if not existing_post:
+                            new_post = Post(**post_data)
+                            db.add(new_post)
+                            new_posts += 1
+                    except Exception as e:
+                        print(f"Ошибка при сохранении поста {post_data.get('message_id', 'unknown')}: {e}")
+                        continue
+                
+                if new_posts > 0:
+                    db.commit()
+                    total_posts += new_posts
+                    
+                results.append({
+                    "channel": source.channel_name,
+                    "new_posts": new_posts,
+                    "status": "success"
+                })
+            else:
+                results.append({
+                    "channel": source.channel_name,
+                    "status": "error",
+                    "message": result["message"]
+                })
+                
+            # Небольшая задержка между каналами
+            await asyncio.sleep(1)
+            
+        except Exception as e:
+            results.append({
+                "channel": source.channel_name,
+                "status": "error",
+                "message": f"Ошибка: {str(e)}"
+            })
+    
+    return {
+        "message": f"Парсинг завершен. Найдено {total_posts} новых постов",
+        "new_posts": total_posts,
+        "parsed_channels": results
+    }
+
 # Frontend fallback
 @app.get("/{path:path}", response_class=HTMLResponse)
 async def spa_fallback(path: str):
@@ -507,4 +1272,112 @@ def get_media_status(db: Session = Depends(get_session)):
             "missing_voice": len([f for f in missing_files if f["media_type"] == "voice"]),
             "missing_audio": len([f for f in missing_files if f["media_type"] == "audio"]),
         }
+    }
+
+@app.post("/api/posts/check-new-optimized")
+async def check_and_parse_new_posts_optimized(db: Session = Depends(get_session)):
+    """Оптимизированная проверка новых постов - парсим только те, которых нет в БД"""
+    print(f"🔍 Запуск оптимизированной проверки новых постов")
+    
+    is_authorized = await telegram_parser.is_authorized()
+    if not is_authorized:
+        raise HTTPException(status_code=401, detail="Не авторизован в Telegram")
+    
+    # Получаем активные источники
+    active_sources = db.query(Source).filter(Source.is_active == True).all()
+    if not active_sources:
+        return {"message": "Нет активных источников", "new_posts": 0}
+    
+    total_new_posts = 0
+    parsed_channels = []
+    
+    for source in active_sources:
+        print(f"🔄 Проверяем канал: {source.channel_name}")
+        try:
+            # Получаем последний пост для этого канала из БД
+            last_post_in_db = db.query(Post).filter(
+                Post.channel_id == source.channel_id
+            ).order_by(Post.post_date.desc()).first()
+            
+            last_message_id_in_db = last_post_in_db.message_id if last_post_in_db else 0
+            last_date_in_db = last_post_in_db.post_date if last_post_in_db else None
+            
+            print(f"📊 Последний пост в БД для {source.channel_name}: message_id={last_message_id_in_db}, дата={last_date_in_db}")
+            
+            # Проверяем, есть ли новые посты (парсим небольшое количество для проверки)
+            check_limit = 20  # Проверяем 20 последних постов из канала
+            result = await telegram_parser.parse_channel_posts(
+                source.channel_id, 
+                limit=check_limit,
+                until_date=last_date_in_db  # Парсим только новее последнего поста в БД
+            )
+            
+            if result["status"] == "error":
+                print(f"❌ Ошибка парсинга канала {source.channel_name}: {result['message']}")
+                continue
+            
+            posts_data = result.get("posts", [])
+            print(f"📝 Получено {len(posts_data)} постов для проверки из {source.channel_name}")
+            
+            # Фильтруем только действительно новые посты
+            new_posts_data = []
+            for post_data in posts_data:
+                message_id = post_data.get("message_id")
+                post_date = post_data.get("post_date")
+                
+                # Пропускаем посты, которые точно есть в БД (по message_id)
+                if message_id <= last_message_id_in_db:
+                    continue
+                
+                # Дополнительная проверка в БД (на случай если message_id не по порядку)
+                existing_post = db.query(Post).filter(
+                    Post.channel_id == post_data["channel_id"],
+                    Post.message_id == message_id
+                ).first()
+                
+                if not existing_post:
+                    new_posts_data.append(post_data)
+                    print(f"  ✅ Новый пост найден: message_id={message_id}, дата={post_date}")
+                else:
+                    print(f"  ⚠️ Пост {message_id} уже существует в БД")
+            
+            # Сохраняем только новые посты
+            channel_new_posts = 0
+            for post_data in new_posts_data:
+                try:
+                    new_post = Post(**post_data)
+                    db.add(new_post)
+                    channel_new_posts += 1
+                except Exception as e:
+                    print(f"❌ Ошибка при сохранении поста {post_data.get('message_id')}: {e}")
+                    continue
+            
+            if channel_new_posts > 0:
+                try:
+                    db.commit()
+                    total_new_posts += channel_new_posts
+                    parsed_channels.append({
+                        "channel_name": source.channel_name,
+                        "new_posts": channel_new_posts
+                    })
+                    print(f"✅ Сохранено {channel_new_posts} новых постов для канала {source.channel_name}")
+                except Exception as e:
+                    print(f"❌ Ошибка при коммите для канала {source.channel_name}: {e}")
+                    db.rollback()
+            else:
+                print(f"📭 Новых постов не найдено для канала {source.channel_name}")
+                
+        except Exception as e:
+            print(f"❌ Ошибка при проверке канала {source.channel_name}: {e}")
+            continue
+    
+    message = f"Оптимизированная проверка завершена. Найдено {total_new_posts} новых постов"
+    if total_new_posts == 0:
+        message = "Проверка завершена. Новых постов не найдено"
+    
+    return {
+        "message": message,
+        "new_posts": total_new_posts,
+        "parsed_channels": parsed_channels,
+        "optimization": "enabled"
     }

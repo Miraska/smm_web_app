@@ -1,0 +1,38 @@
+/* Navigation spacing utilities */
+
+/* Base spacing for fixed navigation */
+.with-fixed-navigation {
+  padding-bottom: calc(4.5rem + env(safe-area-inset-bottom));
+}
+
+/* Mobile adjustments */
+@media (max-width: 640px) {
+  .with-fixed-navigation {
+    padding-bottom: calc(4rem + env(safe-area-inset-bottom));
+  }
+}
+
+/* Tablet adjustments */
+@media (min-width: 641px) and (max-width: 1024px) {
+  .with-fixed-navigation {
+    padding-bottom: calc(5rem + env(safe-area-inset-bottom));
+  }
+}
+
+/* Desktop adjustments */
+@media (min-width: 1025px) {
+  .with-fixed-navigation {
+    padding-bottom: calc(5.5rem + env(safe-area-inset-bottom));
+  }
+}
+
+/* Ensure content has enough space for scrolling */
+.content-with-navigation {
+  min-height: calc(100vh - 8rem);
+}
+
+/* Smooth scroll behavior for navigation */
+.navigation-smooth-scroll {
+  scroll-behavior: smooth;
+  scroll-padding-bottom: calc(5rem + env(safe-area-inset-bottom));
+} 

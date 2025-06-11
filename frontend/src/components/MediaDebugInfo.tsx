@@ -36,7 +36,7 @@ export default function MediaDebugInfo({ post }: Props) {
     } catch (error) {
       return {
         available: false,
-        error: error.message
+        error: error instanceof Error ? error.message : 'Unknown error'
       };
     }
   };

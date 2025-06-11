@@ -1,0 +1,200 @@
+/* Album slider enhancements */
+
+/* Animated progress indicators */
+.album-progress-bar {
+  transition: width 0.3s ease-out;
+  background: linear-gradient(90deg, #3b82f6, #1d4ed8);
+}
+
+.album-progress-track {
+  background: rgba(255, 255, 255, 0.2);
+  backdrop-filter: blur(4px);
+  border-radius: 9999px;
+  overflow: hidden;
+}
+
+/* Position indicators with animations */
+.album-position-indicator {
+  backdrop-filter: blur(8px);
+  transition: all 0.2s ease-out;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.album-position-indicator:hover {
+  transform: scale(1.05);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+/* Carousel navigation enhancements */
+.album-nav-button {
+  backdrop-filter: blur(8px);
+  transition: all 0.2s ease-out;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.album-nav-button:hover {
+  background: rgba(0, 0, 0, 0.7);
+  transform: scale(1.1);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.album-nav-button:active {
+  transform: scale(0.95);
+}
+
+/* Touch feedback for mobile */
+@media (max-width: 640px) {
+  .album-nav-button:active {
+    background: rgba(0, 0, 0, 0.8);
+    transform: scale(0.9);
+  }
+  
+  .album-position-indicator:active {
+    transform: scale(1.1);
+  }
+}
+
+/* Dots indicator enhancements */
+.album-dots-container {
+  backdrop-filter: blur(4px);
+  background: rgba(0, 0, 0, 0.1);
+  border-radius: 12px;
+  padding: 4px 8px;
+}
+
+.album-dot {
+  transition: all 0.2s ease-out;
+  cursor: pointer;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.album-dot:hover {
+  transform: scale(1.2);
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
+.album-dot.active {
+  background: white;
+  box-shadow: 0 0 8px rgba(255, 255, 255, 0.4);
+}
+
+.album-dot.inactive {
+  background: rgba(255, 255, 255, 0.5);
+}
+
+/* Grid mode enhancements */
+.album-grid-item {
+  transition: all 0.2s ease-out;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 2px solid transparent;
+}
+
+.album-grid-item:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
+  border-color: rgba(59, 130, 246, 0.3);
+}
+
+/* Mobile optimized grid */
+@media (max-width: 640px) {
+  .album-grid-item {
+    border-radius: 8px;
+  }
+  
+  .album-grid-item:hover {
+    transform: none;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+  }
+}
+
+/* Album header enhancements */
+.album-header {
+  backdrop-filter: blur(12px);
+  background: rgba(249, 250, 251, 0.9);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+.dark .album-header {
+  background: rgba(31, 41, 55, 0.9);
+  border-bottom-color: rgba(255, 255, 255, 0.05);
+}
+
+.album-counter {
+  background: linear-gradient(135deg, #3b82f6, #1e40af);
+  color: white;
+  font-weight: 600;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+  border-radius: 9999px;
+  padding: 4px 12px;
+  font-size: 0.75rem;
+  line-height: 1;
+}
+
+.dark .album-counter {
+  background: linear-gradient(135deg, #1e40af, #1e3a8a);
+}
+
+/* Show more button enhancements */
+.album-show-more {
+  transition: all 0.3s ease-out;
+  background: linear-gradient(135deg, #f0f9ff, #e0f2fe);
+  border: 2px dashed #bae6fd;
+  cursor: pointer;
+}
+
+.album-show-more:hover {
+  background: linear-gradient(135deg, #e0f2fe, #bae6fd);
+  border-color: #38bdf8;
+  transform: scale(1.02);
+}
+
+.dark .album-show-more {
+  background: linear-gradient(135deg, #1e293b, #334155);
+  border-color: #475569;
+}
+
+.dark .album-show-more:hover {
+  background: linear-gradient(135deg, #334155, #475569);
+  border-color: #64748b;
+}
+
+/* Loading states */
+.album-loading {
+  animation: albumPulse 2s infinite;
+}
+
+@keyframes albumPulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+/* Accessibility enhancements */
+.album-nav-button:focus-visible,
+.album-dot:focus-visible {
+  outline: 2px solid #3b82f6;
+  outline-offset: 2px;
+}
+
+/* Reduce motion for accessibility */
+@media (prefers-reduced-motion: reduce) {
+  .album-progress-bar,
+  .album-position-indicator,
+  .album-nav-button,
+  .album-dot,
+  .album-grid-item {
+    transition: none;
+  }
+  
+  .album-nav-button:hover,
+  .album-position-indicator:hover,
+  .album-grid-item:hover {
+    transform: none;
+  }
+} 

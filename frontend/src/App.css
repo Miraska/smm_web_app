@@ -1,8 +1,8 @@
 #root {
-  max-width: 1280px;
+  max-width: 100%;
   margin: 0 auto;
-  padding: 2rem;
-  text-align: center;
+  padding: 0;
+  text-align: left;
 }
 
 .logo {
@@ -39,4 +39,59 @@
 
 .read-the-docs {
   color: #888;
+}
+
+
+/* Lucide React icons fix */
+svg[data-lucide] {
+  stroke: currentColor !important;
+  fill: none !important;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  display: inline-block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+}
+
+/* Ensure icons are visible in active states */
+button:active svg[data-lucide],
+button.active svg[data-lucide],
+.active svg[data-lucide] {
+  stroke: currentColor !important;
+  fill: none !important;
+  display: inline-block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+}
+
+/* Navigation icons specific fix */
+nav button svg[data-lucide] {
+  stroke: currentColor !important;
+  fill: none !important;
+  display: inline-block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  pointer-events: none;
+  transform-origin: center;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+/* Prevent icon flickering during transitions */
+.transition-transform svg[data-lucide] {
+  will-change: transform;
+  transform-style: preserve-3d;
+}
+
+/* Dark mode icon fixes */
+.dark svg[data-lucide] {
+  stroke: currentColor !important;
+  fill: none !important;
+}
+
+/* Ensure proper color inheritance */
+.text-blue-600 svg[data-lucide],
+.dark .text-blue-400 svg[data-lucide] {
+  stroke: currentColor !important;
 }

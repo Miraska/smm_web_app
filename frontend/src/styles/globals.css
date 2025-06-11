@@ -1,0 +1,139 @@
+/* Import Tailwind CSS */
+@import '../index.css';
+
+/* Global styles */
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  padding: 0;
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+/* Smooth scrolling */
+html {
+  scroll-behavior: smooth;
+}
+
+/* Устанавливаем color-scheme для всего документа */
+html {
+  color-scheme: light;
+}
+
+html.dark {
+  color-scheme: dark;
+}
+
+/* Плавные переходы для всех элементов при переключении темы */
+*,
+*::before,
+*::after {
+  transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease, fill 0.3s ease, stroke 0.3s ease;
+}
+
+/* Focus styles */
+*:focus {
+  outline: none;
+}
+
+*:focus-visible {
+  outline: 2px solid #0ea5e9;
+  outline-offset: 2px;
+}
+
+/* Dark mode focus styles */
+.dark *:focus-visible {
+  outline-color: #38bdf8;
+}
+
+/* Selection styles */
+::selection {
+  background: #bae6fd;
+  color: #0c4a6e;
+}
+
+::-moz-selection {
+  background: #bae6fd;
+  color: #0c4a6e;
+}
+
+/* Dark mode selection styles */
+.dark ::selection {
+  background: #1e293b;
+  color: #bae6fd;
+}
+
+.dark ::-moz-selection {
+  background: #1e293b;
+  color: #bae6fd;
+}
+
+/* Предотвращение мерцания изображений и медиа при переключении темы */
+img,
+video,
+iframe,
+canvas {
+  transition: opacity 0.3s ease;
+}
+
+/* Дополнительные стили для темной темы */
+.dark {
+  /* Кастомные CSS переменные для темной темы */
+  --tw-prose-body: theme('colors.gray.300');
+  --tw-prose-headings: theme('colors.gray.100');
+  --tw-prose-lead: theme('colors.gray.400');
+  --tw-prose-links: theme('colors.blue.400');
+  --tw-prose-bold: theme('colors.gray.100');
+  --tw-prose-counters: theme('colors.gray.400');
+  --tw-prose-bullets: theme('colors.gray.600');
+  --tw-prose-hr: theme('colors.gray.700');
+  --tw-prose-quotes: theme('colors.gray.100');
+  --tw-prose-quote-borders: theme('colors.gray.700');
+  --tw-prose-captions: theme('colors.gray.400');
+  --tw-prose-code: theme('colors.gray.100');
+  --tw-prose-pre-code: theme('colors.gray.200');
+  --tw-prose-pre-bg: theme('colors.gray.800');
+  --tw-prose-th-borders: theme('colors.gray.600');
+  --tw-prose-td-borders: theme('colors.gray.700');
+}
+
+/* Стили для скроллбара в темной теме */
+.dark::-webkit-scrollbar-track {
+  background: #1e293b;
+}
+
+.dark::-webkit-scrollbar-thumb {
+  background: #475569;
+}
+
+.dark::-webkit-scrollbar-thumb:hover {
+  background: #64748b;
+}
+
+/* Обеспечиваем корректное отображение форм в темной теме */
+.dark input,
+.dark textarea,
+.dark select {
+  color-scheme: dark;
+}
+
+/* Стили для элементов, которые должны сохранять контраст */
+.theme-aware-bg {
+  @apply bg-white dark:bg-gray-800;
+}
+
+.theme-aware-text {
+  @apply text-gray-900 dark:text-gray-100;
+}
+
+.theme-aware-border {
+  @apply border-gray-200 dark:border-gray-700;
+}
+
+.theme-aware-hover {
+  @apply hover:bg-gray-50 dark:hover:bg-gray-700;
+} 
