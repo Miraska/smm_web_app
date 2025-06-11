@@ -43,8 +43,16 @@ class TelegramParser:
             raise ValueError("TELEGRAM_API_ID и TELEGRAM_API_HASH должны быть указаны в .env файле")
         
         print("📁 Создаем директорию для сессий...")
-        # Создаем директорию для сессий если её нет
-        os.makedirs("sessions", exist_ok=True)
+        # Устанавливаем umask для создания файлов с правами записи
+        old_umask = os.umask(0o000)
+        try:
+            # Создаем директорию для сессий если её нет
+            os.makedirs("sessions", exist_ok=True)
+            # Принудительно даем права 777 на папку
+            os.chmod("sessions", 0o777)
+        finally:
+            # Восстанавливаем старый umask
+            os.umask(old_umask)
         
         print("🔧 Создаем новый клиент Telegram...")
         self.client = Client(
@@ -53,6 +61,18 @@ class TelegramParser:
             api_hash=self.api_hash,
             workdir="sessions/"
         )
+        
+        # Принудительно устанавливаем права на папку sessions
+        try:
+            os.chmod("sessions", 0o777)
+            # Если есть файлы в папке, даем права и на них
+            for file in os.listdir("sessions"):
+                file_path = os.path.join("sessions", file)
+                if os.path.isfile(file_path):
+                    os.chmod(file_path, 0o666)
+        except Exception as e:
+            print(f"⚠️ Предупреждение при установке прав: {e}")
+        
         self._initialized = True
         print("✅ Клиент создан и инициализирован")
         
@@ -108,6 +128,26 @@ class TelegramParser:
             self.clear_auth_cache()
             
             print(f"📱 Проверяем код {phone_code} для номера {phone_number}")
+            
+            # Диагностика прав доступа
+            sessions_dir = "sessions"
+            print(f"🔍 Диагностика папки {sessions_dir}:")
+            print(f"  - Существует: {os.path.exists(sessions_dir)}")
+            if os.path.exists(sessions_dir):
+                stat_info = os.stat(sessions_dir)
+                print(f"  - Права: {oct(stat_info.st_mode)[-3:]}")
+                print(f"  - Владелец: uid={stat_info.st_uid}, gid={stat_info.st_gid}")
+                print(f"  - Текущий пользователь: uid={os.getuid()}, gid={os.getgid()}")
+                
+                # Проверяем возможность записи
+                test_file = os.path.join(sessions_dir, "test_write.tmp")
+                try:
+                    with open(test_file, 'w') as f:
+                        f.write("test")
+                    os.remove(test_file)
+                    print(f"  - Запись возможна: ✅")
+                except Exception as e:
+                    print(f"  - Запись невозможна: ❌ {e}")
             
             # Убеждаемся, что клиент подключен
             if not self.client.is_connected:
