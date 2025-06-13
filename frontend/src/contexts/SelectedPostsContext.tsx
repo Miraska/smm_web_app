@@ -1,20 +1,22 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
-import type { ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
+import { selectedPostsApi } from '../services/api';
+import { getErrorMessage } from '../utils';
 import type { SelectedPost } from '../types';
 
 interface SelectedPostsContextType {
   selectedPosts: SelectedPost[];
-  setSelectedPosts: React.Dispatch<React.SetStateAction<SelectedPost[]>>;
-  addSelectedPost: (post: SelectedPost) => void;
-  removeSelectedPost: (postId: number) => void;
-  updateSelectedPost: (postId: number, updates: Partial<SelectedPost>) => void;
-  getSelectedPostsCount: () => number;
   loading: boolean;
-  setLoading: React.Dispatch<React.SetStateAction<boolean>>;
+  error: string | null;
   loadSelectedPosts: () => Promise<void>;
+  removeSelectedPost: (id: number) => Promise<void>;
+  updateSelectedPost: (id: number, data: Partial<SelectedPost>) => Promise<SelectedPost>;
+  addSelectedPost: (selectedPost: SelectedPost) => void;
+  removeSelectedPostLocal: (postId: number) => void;
+  isPostSelected: (postId: number) => boolean;
+  setError: (error: string | null) => void;
 }
 
-const SelectedPostsContext = createContext<SelectedPostsContextType | undefined>(undefined);
+const SelectedPostsContext = createContext<SelectedPostsContextType | null>(null);
 
 interface SelectedPostsProviderProps {
   children: ReactNode;
@@ -23,56 +25,80 @@ interface SelectedPostsProviderProps {
 export const SelectedPostsProvider: React.FC<SelectedPostsProviderProps> = ({ children }) => {
   const [selectedPosts, setSelectedPosts] = useState<SelectedPost[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const loadSelectedPosts = async () => {
+  const loadSelectedPosts = useCallback(async () => {
     try {
       setLoading(true);
-      const response = await fetch('/api/selected-posts');
-      if (response.ok) {
-        const data = await response.json();
-        setSelectedPosts(data.selected_posts || []);
-      }
+      setError(null);
+      const response = await selectedPostsApi.getAll();
+      setSelectedPosts(response);
     } catch (error) {
-      console.error('Ошибка загрузки отобранных постов:', error);
+      setError(getErrorMessage(error));
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  const addSelectedPost = (post: SelectedPost) => {
-    setSelectedPosts(prev => {
-      const exists = prev.find(p => p.id === post.id);
-      if (exists) return prev;
-      return [...prev, post];
-    });
-  };
+  const removeSelectedPost = useCallback(async (id: number) => {
+    try {
+      setLoading(true);
+      setError(null);
+      await selectedPostsApi.remove(id);
+      setSelectedPosts(prev => prev.filter(post => post.id !== id));
+    } catch (error) {
+      setError(getErrorMessage(error));
+      throw error;
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
-  const removeSelectedPost = (postId: number) => {
-    setSelectedPosts(prev => prev.filter(post => post.id !== postId));
-  };
+  const updateSelectedPost = useCallback(async (id: number, data: Partial<SelectedPost>) => {
+    try {
+      setLoading(true);
+      setError(null);
+      const updatedPost = await selectedPostsApi.update(id, data);
+      setSelectedPosts(prev => 
+        prev.map(post => post.id === id ? updatedPost : post)
+      );
+      return updatedPost;
+    } catch (error) {
+      setError(getErrorMessage(error));
+      throw error;
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
-  const updateSelectedPost = (postId: number, updates: Partial<SelectedPost>) => {
-    setSelectedPosts(prev => prev.map(post => 
-      post.id === postId ? { ...post, ...updates } : post
-    ));
-  };
+  const addSelectedPost = useCallback((selectedPost: SelectedPost) => {
+    setSelectedPosts(prev => [...prev, selectedPost]);
+  }, []);
 
-  const getSelectedPostsCount = () => selectedPosts.length;
+  const removeSelectedPostLocal = useCallback((postId: number) => {
+    setSelectedPosts(prev => prev.filter(post => post.post_id !== postId));
+  }, []);
 
+  const isPostSelected = useCallback((postId: number) => {
+    return selectedPosts.some(selected => selected.post_id === postId);
+  }, [selectedPosts]);
+
+  // Загружаем отобранные посты при монтировании
   useEffect(() => {
     loadSelectedPosts();
-  }, []);
+  }, [loadSelectedPosts]);
 
   const value: SelectedPostsContextType = {
     selectedPosts,
-    setSelectedPosts,
-    addSelectedPost,
+    loading,
+    error,
+    loadSelectedPosts,
     removeSelectedPost,
     updateSelectedPost,
-    getSelectedPostsCount,
-    loading,
-    setLoading,
-    loadSelectedPosts,
+    addSelectedPost,
+    removeSelectedPostLocal,
+    isPostSelected,
+    setError,
   };
 
   return (
@@ -84,7 +110,7 @@ export const SelectedPostsProvider: React.FC<SelectedPostsProviderProps> = ({ ch
 
 export const useSelectedPosts = (): SelectedPostsContextType => {
   const context = useContext(SelectedPostsContext);
-  if (context === undefined) {
+  if (!context) {
     throw new Error('useSelectedPosts must be used within a SelectedPostsProvider');
   }
   return context;
