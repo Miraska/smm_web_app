@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
 import { Star, Trash2, RefreshCw, AlertCircle, Edit3, Loader2, Calendar, Eye, MessageCircle, Heart, Grid3X3 } from 'lucide-react';
-import { useSelectedPosts } from '../../../hooks/useSelectedPosts';
+import { useSelectedPosts } from '../../../contexts/SelectedPostsContext';
 import { useAuth } from '../../../hooks/useAuth';
 import { formatDate, formatNumber, stripHtml, truncateText } from '../../../utils';
 import MediaRenderer from '../../../components/MediaRenderer';
+import { PostEditPage } from './PostEditPage';
 import type { SelectedPost } from '../../../types';
 
 export const SelectedPostsPage: React.FC = () => {
@@ -20,10 +21,29 @@ export const SelectedPostsPage: React.FC = () => {
   
   const [editingPost, setEditingPost] = useState<SelectedPost | null>(null);
   const [editedText, setEditedText] = useState('');
+  const [editingPostId, setEditingPostId] = useState<number | null>(null);
 
   const handleEdit = (post: SelectedPost) => {
     setEditingPost(post);
     setEditedText(post.edited_text || post.original_text);
+  };
+
+  const handleAdvancedEdit = (post: SelectedPost) => {
+    setEditingPostId(post.id);
+  };
+
+  const handleSaveAdvancedEdit = async (editedText: string, notes?: string) => {
+    if (!editingPostId) return;
+    
+    try {
+      await updateSelectedPost(editingPostId, { 
+        edited_text: editedText,
+        notes: notes 
+      });
+      setEditingPostId(null);
+    } catch (error) {
+      // Ошибка уже обработана в хуке
+    }
   };
 
   const handleSaveEdit = async () => {
@@ -67,6 +87,20 @@ export const SelectedPostsPage: React.FC = () => {
         </p>
       </div>
     );
+  }
+
+  // Показать страницу редактирования, если выбран пост
+  if (editingPostId) {
+    const postToEdit = selectedPosts.find(post => post.id === editingPostId);
+    if (postToEdit) {
+      return (
+        <PostEditPage
+          selectedPost={postToEdit}
+          onBack={() => setEditingPostId(null)}
+          onSave={handleSaveAdvancedEdit}
+        />
+      );
+    }
   }
 
   return (
@@ -156,9 +190,10 @@ export const SelectedPostsPage: React.FC = () => {
 
                   <div className="flex items-center space-x-2">
                     <button
-                      onClick={() => handleEdit(selectedPost)}
+                      onClick={() => handleAdvancedEdit(selectedPost)}
                       disabled={loading}
                       className="p-2 text-gray-400 hover:text-blue-600 transition-colors"
+                      title="Расширенное редактирование"
                     >
                       <Edit3 className="w-4 h-4" />
                     </button>

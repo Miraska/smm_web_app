@@ -1,6 +1,6 @@
 import React from 'react';
 import { Radio, FileText, Star, Settings } from 'lucide-react';
-import { useSelectedPosts } from '../hooks/useSelectedPosts';
+import { useSelectedPosts } from '../contexts/SelectedPostsContext';
 import type { TabId } from '../types';
 
 interface NavigationProps {

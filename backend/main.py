@@ -205,10 +205,17 @@ async def add_source(source: SourceCreate, db: Session = Depends(get_session)):
     
     return SourceResponse.from_orm(new_source)
 
-async def parse_new_posts_for_source(channel_id: str, db: Session):
+async def parse_new_posts_for_source(channel_id: str, db: Session, current_parser=None):
     """Оптимизированный парсер новых постов для конкретного источника"""
     try:
-        is_authorized = await telegram_parser.is_authorized()
+        # Если парсер не передан, получаем текущего пользователя
+        if not current_parser:
+            current_parser = await multi_user_manager.get_current_user_parser(db)
+            if not current_parser:
+                print(f"⚠️ Нет авторизованных пользователей, пропускаем парсинг для {channel_id}")
+                return
+        
+        is_authorized = await current_parser.is_authorized()
         if not is_authorized:
             print(f"⚠️ Не авторизован в Telegram, пропускаем парсинг для {channel_id}")
             return
@@ -225,7 +232,7 @@ async def parse_new_posts_for_source(channel_id: str, db: Session):
         
         # Умная проверка - парсим только новее последнего поста
         check_limit = 15  # Проверяем 15 последних постов из канала
-        result = await telegram_parser.parse_channel_posts(
+        result = await current_parser.parse_channel_posts(
             channel_id, 
             limit=check_limit,
             until_date=last_date  # Парсим только новее последнего поста в БД
@@ -377,11 +384,17 @@ def remove_source(source_id: int, db: Session = Depends(get_session)):
 @app.post("/api/sources/parse-all")
 async def parse_all_sources(db: Session = Depends(get_session)):
     """Парсинг всех активных источников"""
-    is_authorized = await telegram_parser.is_authorized()
+    # Получаем парсер для текущего пользователя
+    current_parser = await multi_user_manager.get_current_user_parser(db)
+    
+    if not current_parser:
+        raise HTTPException(status_code=401, detail="Нет авторизованных пользователей")
+    
+    is_authorized = await current_parser.is_authorized()
     if not is_authorized:
         raise HTTPException(status_code=401, detail="Не авторизован в Telegram")
     
-    result = await telegram_parser.parse_all_sources_limited(db, limit=10)
+    result = await current_parser.parse_all_sources_limited(db, limit=10)
     if result["status"] == "error":
         raise HTTPException(status_code=400, detail=result["message"])
     return result
@@ -391,7 +404,13 @@ async def parse_new_source(channel_id: str, db: Session = Depends(get_session)):
     """Оптимизированный быстрый парсинг для нового источника"""
     print(f"🚀 Оптимизированный автопарсинг нового источника: {channel_id}")
     
-    is_authorized = await telegram_parser.is_authorized()
+    # Получаем парсер для текущего пользователя
+    current_parser = await multi_user_manager.get_current_user_parser(db)
+    
+    if not current_parser:
+        return {"message": "Нет авторизованных пользователей", "new_posts": 0}
+    
+    is_authorized = await current_parser.is_authorized()
     if not is_authorized:
         return {"message": "Не авторизован в Telegram", "new_posts": 0}
     
@@ -407,9 +426,10 @@ async def parse_new_source(channel_id: str, db: Session = Depends(get_session)):
         print(f"📊 Последний пост в БД для канала {channel_id}: message_id={last_message_id}, дата={last_date}")
         
         # Парсим только новые посты
-        result = await telegram_parser.parse_channel_posts(
+        check_limit = 20  # Проверяем 20 последних постов из канала
+        result = await current_parser.parse_channel_posts(
             channel_id, 
-            limit=15,  # Проверяем больше постов для нового источника 
+            limit=check_limit,
             until_date=last_date  # Парсим только новее последнего поста в БД
         )
         
@@ -644,9 +664,7 @@ async def get_telegram_status(db: Session = Depends(get_session)):
                 "timestamp": datetime.now().isoformat()
             }
         
-        # Проверяем авторизацию
-        current_parser._auth_cache = None
-        current_parser._auth_cache_time = None
+        # Проверяем авторизацию (используем кэш для уменьшения нагрузки на API)
         is_authorized = await current_parser.is_authorized()
         
         # Диагностическая информация
@@ -845,23 +863,17 @@ async def switch_user(user_id: int, db: Session = Depends(get_session)):
 @app.post("/api/telegram/clear-auth-cache")
 async def clear_auth_cache():
     """Очистить кэш авторизации для принудительной проверки"""
-    telegram_parser._auth_cache = None
-    telegram_parser._auth_cache_time = None
+    telegram_parser.clear_auth_cache()
     return {"status": "success", "message": "Кэш авторизации очищен"}
 
 @app.post("/api/telegram/clear-session")
 async def clear_session():
     """Очистить файл сессии и переинициализировать клиент"""
     try:
-        await telegram_parser.stop()
-        session_file = f"sessions/smm_bot_session.session"
-        if os.path.exists(session_file):
-            os.remove(session_file)
-            print(f"✅ Файл сессии удален: {session_file}")
+        # Используем новый метод logout() для корректного выхода
+        await telegram_parser.logout()
         
-        telegram_parser._initialized = False
-        telegram_parser._auth_cache = None
-        telegram_parser._auth_cache_time = None
+        # Переинициализируем клиент
         await telegram_parser.initialize_client()
         
         return {"status": "success", "message": "Сессия очищена и клиент переинициализирован"}
@@ -904,7 +916,13 @@ async def get_telegram_channels(search: str = None, db: Session = Depends(get_se
 @app.post("/api/parse")
 async def parse_channels(db: Session = Depends(get_session)):
     """Запустить парсинг всех активных каналов"""
-    result = await telegram_parser.parse_all_sources(db)
+    # Получаем парсер для текущего пользователя
+    current_parser = await multi_user_manager.get_current_user_parser(db)
+    
+    if not current_parser:
+        raise HTTPException(status_code=401, detail="Нет авторизованных пользователей")
+    
+    result = await current_parser.parse_all_sources(db)
     if result["status"] == "error":
         raise HTTPException(status_code=400, detail=result["message"])
     return result
@@ -912,7 +930,13 @@ async def parse_channels(db: Session = Depends(get_session)):
 @app.post("/api/parse-limited")
 async def parse_channels_limited(db: Session = Depends(get_session)):
     """Запустить ограниченный парсинг (только 5 постов)"""
-    result = await telegram_parser.parse_all_sources_limited(db, limit=5)
+    # Получаем парсер для текущего пользователя
+    current_parser = await multi_user_manager.get_current_user_parser(db)
+    
+    if not current_parser:
+        raise HTTPException(status_code=401, detail="Нет авторизованных пользователей")
+    
+    result = await current_parser.parse_all_sources_limited(db, limit=5)
     if result["status"] == "error":
         raise HTTPException(status_code=400, detail=result["message"])
     return result
@@ -920,11 +944,17 @@ async def parse_channels_limited(db: Session = Depends(get_session)):
 @app.post("/api/parse/channel/{channel_id}")
 async def parse_single_channel(channel_id: str, db: Session = Depends(get_session)):
     """Парсинг одного конкретного канала"""
-    is_authorized = await telegram_parser.is_authorized()
+    # Получаем парсер для текущего пользователя
+    current_parser = await multi_user_manager.get_current_user_parser(db)
+    
+    if not current_parser:
+        raise HTTPException(status_code=401, detail="Нет авторизованных пользователей")
+    
+    is_authorized = await current_parser.is_authorized()
     if not is_authorized:
         raise HTTPException(status_code=401, detail="Не авторизован в Telegram")
     
-    result = await telegram_parser.parse_channel_posts(channel_id, limit=10)
+    result = await current_parser.parse_channel_posts(channel_id, limit=10)
     if result["status"] == "error":
         raise HTTPException(status_code=400, detail=result["message"])
     
@@ -982,13 +1012,19 @@ async def parse_single_channel(channel_id: str, db: Session = Depends(get_sessio
 @app.post("/api/redownload-media/{channel_id}/{message_id}")
 async def redownload_media(channel_id: str, message_id: int, db: Session = Depends(get_session)):
     """Повторное скачивание медиафайла для конкретного сообщения"""
-    is_authorized = await telegram_parser.is_authorized()
+    # Получаем парсер для текущего пользователя
+    current_parser = await multi_user_manager.get_current_user_parser(db)
+    
+    if not current_parser:
+        raise HTTPException(status_code=401, detail="Нет авторизованных пользователей")
+    
+    is_authorized = await current_parser.is_authorized()
     if not is_authorized:
         raise HTTPException(status_code=401, detail="Не авторизован в Telegram")
     
     try:
         # Получаем информацию о канале
-        channel_info = await telegram_parser.get_channel_info(channel_id)
+        channel_info = await current_parser.get_channel_info(channel_id)
         if not channel_info:
             raise HTTPException(status_code=404, detail=f"Канал {channel_id} не найден или недоступен")
         
@@ -997,19 +1033,19 @@ async def redownload_media(channel_id: str, message_id: int, db: Session = Depen
         os.makedirs(media_dir, exist_ok=True)
         
         # Получаем конкретное сообщение
-        if not telegram_parser.client.is_connected:
-            await telegram_parser.client.connect()
+        if not current_parser.client.is_connected:
+            await current_parser.client.connect()
             
         try:
             # Используем get_messages для получения конкретного сообщения
-            messages = await telegram_parser.client.get_messages(channel_id, message_ids=[message_id])
+            messages = await current_parser.client.get_messages(channel_id, message_ids=[message_id])
             if not messages or not messages[0]:
                 raise HTTPException(status_code=404, detail=f"Сообщение {message_id} не найдено")
             
             message = messages[0]
             
             # Пытаемся скачать медиа
-            media_info = await telegram_parser._parse_media(message, media_dir, channel_id)
+            media_info = await current_parser._parse_media(message, media_dir, channel_id)
             
             if media_info:
                 # Обновляем информацию о медиа в базе данных
@@ -1054,16 +1090,30 @@ async def cleanup_media(db: Session = Depends(get_session)):
     import shutil
     
     try:
-        print("🛑 Безопасно завершаем Telegram клиент перед очисткой медиа...")
-        # Безопасно завершаем Telegram клиент
+        print("🛑 Безопасно завершаем Telegram клиенты перед очисткой медиа...")
+        # Безопасно завершаем всех Telegram клиентов
         try:
-            await telegram_parser.stop()
+            await multi_user_manager.stop_all()
         except Exception as stop_error:
-            print(f"⚠️ Предупреждение при остановке клиента: {stop_error}")
+            print(f"⚠️ Предупреждение при остановке клиентов: {stop_error}")
         
-        # Очищаем кэш авторизации
-        telegram_parser.clear_auth_cache()
-        print("🗑️ Кэш авторизации очищен")
+        print("🗑️ Клиенты остановлены")
+        
+        # Удаляем все отобранные посты (так как очищаем все медиа)
+        total_selected = db.query(SelectedPost).count()
+        print(f"📊 Найдено {total_selected} отобранных постов для удаления")
+        
+        if total_selected > 0:
+            # Снимаем флаг selected со всех постов
+            db.query(Post).filter(Post.is_selected == True).update({"is_selected": False})
+            
+            # Удаляем все отобранные посты
+            db.query(SelectedPost).delete()
+            db.commit()
+            print(f"✅ Удалено {total_selected} отобранных постов")
+        else:
+            print("📭 Отобранных постов для удаления не найдено")
+        
         # Получаем директорию media
         media_dir = "../frontend/public/media"
         if not os.path.exists(media_dir):
@@ -1111,8 +1161,9 @@ async def cleanup_media(db: Session = Depends(get_session)):
         
         return {
             "status": "success",
-            "message": f"Полная очистка завершена: удалено {deleted_files} файлов, освобождено {format_size(freed_space)}",
+            "message": f"Полная очистка завершена: удалено {deleted_files} файлов, {total_selected} отобранных постов, освобождено {format_size(freed_space)}",
             "deleted_files": deleted_files,
+            "deleted_selected_posts": total_selected,
             "freed_space": freed_space,
             "freed_space_formatted": format_size(freed_space)
         }
@@ -1128,9 +1179,8 @@ async def cleanup_media(db: Session = Depends(get_session)):
 
 @app.post("/api/posts/check-new")
 async def check_and_parse_new_posts(db: Session = Depends(get_session)):
-    """Обновленный эндпоинт с оптимизацией - используется frontend"""
-    # Просто вызываем оптимизированную версию
-    return await check_and_parse_new_posts_optimized(db)
+    """Ультра-оптимизированный эндпоинт с предварительной проверкой по дате"""
+    return await check_and_parse_new_posts_ultra_optimized(db)
 
 @app.post("/api/posts/parse-more")
 async def parse_more_posts(limit: int = 5, db: Session = Depends(get_session)):
@@ -1279,7 +1329,13 @@ async def check_and_parse_new_posts_optimized(db: Session = Depends(get_session)
     """Оптимизированная проверка новых постов - парсим только те, которых нет в БД"""
     print(f"🔍 Запуск оптимизированной проверки новых постов")
     
-    is_authorized = await telegram_parser.is_authorized()
+    # Получаем парсер для текущего пользователя
+    current_parser = await multi_user_manager.get_current_user_parser(db)
+    
+    if not current_parser:
+        raise HTTPException(status_code=401, detail="Нет авторизованных пользователей")
+    
+    is_authorized = await current_parser.is_authorized()
     if not is_authorized:
         raise HTTPException(status_code=401, detail="Не авторизован в Telegram")
     
@@ -1306,7 +1362,7 @@ async def check_and_parse_new_posts_optimized(db: Session = Depends(get_session)
             
             # Проверяем, есть ли новые посты (парсим небольшое количество для проверки)
             check_limit = 20  # Проверяем 20 последних постов из канала
-            result = await telegram_parser.parse_channel_posts(
+            result = await current_parser.parse_channel_posts(
                 source.channel_id, 
                 limit=check_limit,
                 until_date=last_date_in_db  # Парсим только новее последнего поста в БД
@@ -1380,4 +1436,177 @@ async def check_and_parse_new_posts_optimized(db: Session = Depends(get_session)
         "new_posts": total_new_posts,
         "parsed_channels": parsed_channels,
         "optimization": "enabled"
+    }
+
+@app.post("/api/posts/check-new-ultra-optimized")
+async def check_and_parse_new_posts_ultra_optimized(db: Session = Depends(get_session)):
+    """Ультра-оптимизированная проверка новых постов с быстрой предварительной проверкой по дате"""
+    print(f"🚀 Запуск УЛЬТРА-оптимизированной проверки новых постов")
+    
+    # Получаем парсер для текущего пользователя
+    current_parser = await multi_user_manager.get_current_user_parser(db)
+    
+    if not current_parser:
+        raise HTTPException(status_code=401, detail="Нет авторизованных пользователей")
+    
+    is_authorized = await current_parser.is_authorized()
+    if not is_authorized:
+        raise HTTPException(status_code=401, detail="Не авторизован в Telegram")
+    
+    # Получаем активные источники
+    active_sources = db.query(Source).filter(Source.is_active == True).all()
+    if not active_sources:
+        return {"message": "Нет активных источников", "new_posts": 0}
+    
+    total_new_posts = 0
+    parsed_channels = []
+    channels_to_parse = []  # Только каналы с новыми постами
+    
+    print(f"📊 Этап 1: Быстрая проверка {len(active_sources)} каналов по дате...")
+    
+    # ЭТАП 1: Быстрая проверка всех каналов по дате (экономим время)
+    for source in active_sources:
+        try:
+            # Получаем последний пост для этого канала из БД
+            last_post_in_db = db.query(Post).filter(
+                Post.channel_id == source.channel_id
+            ).order_by(Post.post_date.desc()).first()
+            
+            last_date_in_db = last_post_in_db.post_date if last_post_in_db else None
+            
+            print(f"📅 Последний пост в БД для {source.channel_name}: дата={last_date_in_db}")
+            
+            # Быстрая проверка только по дате
+            check_result = await current_parser.quick_check_new_posts(
+                source.channel_id, 
+                last_date_in_db
+            )
+            
+            if check_result["status"] == "success" and check_result.get("has_new_posts", False):
+                print(f"✅ {source.channel_name}: НАЙДЕНЫ новые посты!")
+                channels_to_parse.append({
+                    "source": source,
+                    "last_date_in_db": last_date_in_db,
+                    "latest_info": check_result
+                })
+            else:
+                print(f"📭 {source.channel_name}: новых постов НЕТ")
+                
+        except Exception as e:
+            print(f"❌ Ошибка быстрой проверки канала {source.channel_name}: {e}")
+            # В случае ошибки проверки, добавляем канал для полного парсинга
+            channels_to_parse.append({
+                "source": source,
+                "last_date_in_db": None,
+                "latest_info": None
+            })
+    
+    print(f"🎯 Этап 1 завершен: {len(channels_to_parse)} из {len(active_sources)} каналов имеют новые посты")
+    
+    if not channels_to_parse:
+        return {
+            "message": "Быстрая проверка завершена. Новых постов не найдено", 
+            "new_posts": 0,
+            "checked_channels": len(active_sources),
+            "channels_with_new_posts": 0,
+            "optimization": "ultra-enabled"
+        }
+    
+    print(f"📥 Этап 2: Полный парсинг только каналов с новыми постами...")
+    
+    # ЭТАП 2: Полный парсинг только каналов с новыми постами
+    for channel_info in channels_to_parse:
+        source = channel_info["source"]
+        last_date_in_db = channel_info["last_date_in_db"]
+        
+        print(f"🔄 Парсим канал с новыми постами: {source.channel_name}")
+        
+        try:
+            # Получаем последний message_id из БД для более точной фильтрации
+            last_post_in_db = db.query(Post).filter(
+                Post.channel_id == source.channel_id
+            ).order_by(Post.post_date.desc()).first()
+            
+            last_message_id_in_db = last_post_in_db.message_id if last_post_in_db else 0
+            
+            # Парсим с ограничением по дате
+            check_limit = 20  # Проверяем больше постов, так как знаем что есть новые
+            result = await current_parser.parse_channel_posts(
+                source.channel_id, 
+                limit=check_limit,
+                until_date=last_date_in_db  # Парсим только новее последнего поста в БД
+            )
+            
+            if result["status"] == "error":
+                print(f"❌ Ошибка парсинга канала {source.channel_name}: {result['message']}")
+                continue
+            
+            posts_data = result.get("posts", [])
+            print(f"📝 Получено {len(posts_data)} постов для обработки из {source.channel_name}")
+            
+            # Фильтруем только действительно новые посты
+            channel_new_posts = 0
+            for post_data in posts_data:
+                message_id = post_data.get("message_id")
+                post_date = post_data.get("post_date")
+                
+                # Пропускаем посты, которые точно есть в БД (по message_id)
+                if message_id <= last_message_id_in_db:
+                    continue
+                
+                # Дополнительная проверка в БД
+                existing_post = db.query(Post).filter(
+                    Post.channel_id == post_data["channel_id"],
+                    Post.message_id == message_id
+                ).first()
+                
+                if not existing_post:
+                    try:
+                        new_post = Post(**post_data)
+                        db.add(new_post)
+                        channel_new_posts += 1
+                        print(f"  ✅ Добавлен новый пост: message_id={message_id}, дата={post_date}")
+                    except Exception as e:
+                        print(f"❌ Ошибка при сохранении поста {message_id}: {e}")
+                        continue
+                else:
+                    print(f"  ⚠️ Пост {message_id} уже существует в БД")
+            
+            if channel_new_posts > 0:
+                try:
+                    db.commit()
+                    total_new_posts += channel_new_posts
+                    parsed_channels.append({
+                        "channel_name": source.channel_name,
+                        "new_posts": channel_new_posts
+                    })
+                    print(f"✅ Сохранено {channel_new_posts} новых постов для канала {source.channel_name}")
+                except Exception as e:
+                    print(f"❌ Ошибка при коммите для канала {source.channel_name}: {e}")
+                    db.rollback()
+            else:
+                print(f"📭 После фильтрации новых постов не найдено для канала {source.channel_name}")
+                
+        except Exception as e:
+            print(f"❌ Ошибка при парсинге канала {source.channel_name}: {e}")
+            continue
+    
+    print(f"🎯 Этап 2 завершен: обработано {len(channels_to_parse)} каналов")
+    
+    message = f"Ультра-оптимизированная проверка завершена. Найдено {total_new_posts} новых постов"
+    if total_new_posts == 0:
+        message = "Ультра-проверка завершена. После детального анализа новых постов не найдено"
+    
+    return {
+        "message": message,
+        "new_posts": total_new_posts,
+        "parsed_channels": parsed_channels,
+        "checked_channels": len(active_sources),
+        "channels_with_new_posts": len(channels_to_parse),
+        "optimization": "ultra-enabled",
+        "performance": {
+            "quick_check_completed": True,
+            "full_parse_only_needed_channels": True,
+            "time_saved": f"Проверили {len(active_sources)} каналов, парсили только {len(channels_to_parse)}"
+        }
     }

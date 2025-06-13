@@ -135,6 +135,38 @@ export interface TelegramWebApp {
   };
 }
 
+// Settings types
+export interface EditingSettings {
+  prompt: string;
+  auto_apply: boolean;
+  preserve_formatting: boolean;
+  openrouter_api_key?: string;
+  selected_model?: string;
+}
+
+// Telegram Channel types
+export interface TelegramChannel {
+  id: string;
+  title: string;
+  username?: string;
+  participants_count?: number;
+  is_admin: boolean;
+  can_post_messages: boolean;
+  access_hash?: string;
+}
+
+// Scheduled Post types  
+export interface ScheduledPost extends BaseEntity {
+  selected_post_id: number;
+  selected_post?: SelectedPost;
+  channel_id: string;
+  channel_title?: string;
+  scheduled_time: string;
+  status: 'pending' | 'published' | 'failed' | 'cancelled';
+  message_id?: number;
+  error_message?: string;
+}
+
 declare global {
   interface Window {
     Telegram?: {

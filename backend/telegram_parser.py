@@ -30,6 +30,8 @@ class TelegramParser:
         self._initialized = False
         self._auth_cache = None
         self._auth_cache_time = None
+        self._quick_check_cache = {}  # Кэш для быстрых проверок каналов
+        self._quick_check_cache_time = {}  # Время кэша для каждого канала
         
     async def initialize_client(self):
         """Инициализация клиента Telegram"""
@@ -124,8 +126,8 @@ class TelegramParser:
             if not self.client:
                 await self.initialize_client()
             
-            # Очищаем кэш для проверки авторизации
-            self.clear_auth_cache()
+            # НЕ очищаем кэш здесь, так как это удаляет файл сессии
+            # self.clear_auth_cache()  # УБИРАЕМ ЭТУ СТРОКУ
             
             print(f"📱 Проверяем код {phone_code} для номера {phone_number}")
             
@@ -163,6 +165,10 @@ class TelegramParser:
                 )
                 
                 print(f"✅ Успешная авторизация пользователя: {signed_in.first_name}")
+                
+                # Очищаем кэш ПОСЛЕ успешной авторизации для принудительной проверки
+                self._auth_cache = None
+                self._auth_cache_time = None
                 
                 # Проверяем авторизацию
                 if await self.is_authorized():
@@ -226,11 +232,11 @@ class TelegramParser:
         """Проверить, авторизован ли пользователь"""
         print("🔍 Проверяем статус авторизации...")
         
-        # Используем кэш на 10 секунд (уменьшили с 30 для более быстрого обнаружения проблем)
+        # Используем кэш на 60 секунд для минимизации запросов к API
         now = datetime.now()
         if (self._auth_cache is not None and 
             self._auth_cache_time and 
-            (now - self._auth_cache_time).total_seconds() < 10):
+            (now - self._auth_cache_time).total_seconds() < 60):
             print(f"📋 Используем кэшированный статус: {self._auth_cache}")
             return self._auth_cache
             
@@ -431,6 +437,100 @@ class TelegramParser:
         except Exception as e:
             print(f"Ошибка получения информации о канале {channel_id}: {e}")
             return None
+
+    async def quick_check_new_posts(self, channel_id: str, last_date_in_db=None):
+        """Быстрая проверка наличия новых постов в канале по дате последнего сообщения"""
+        try:
+            # Проверяем кэш быстрых проверок (60 секунд на канал)
+            now = datetime.now()
+            if (channel_id in self._quick_check_cache and 
+                channel_id in self._quick_check_cache_time and
+                (now - self._quick_check_cache_time[channel_id]).total_seconds() < 60):
+                cached_result = self._quick_check_cache[channel_id]
+                print(f"📋 Используем кэшированный результат для канала {channel_id}: {cached_result.get('has_new_posts', False)}")
+                return cached_result
+            
+            if not self.client:
+                await self.initialize_client()
+            
+            # Проверяем авторизацию
+            if not await self.is_authorized():
+                result = {"status": "error", "message": "Не авторизован в Telegram"}
+                self._quick_check_cache[channel_id] = result
+                self._quick_check_cache_time[channel_id] = now
+                return result
+            
+            # Убеждаемся, что клиент подключен
+            if not self.client.is_connected:
+                await self.client.connect()
+            
+            print(f"🔍 Быстрая проверка канала {channel_id}")
+            
+            # Получаем только последнее сообщение из канала
+            try:
+                async for message in self.client.get_chat_history(channel_id, limit=1):
+                    latest_message_date = message.date
+                    latest_message_id = message.id
+                    
+                    print(f"📅 Последнее сообщение в канале: ID={latest_message_id}, дата={latest_message_date}")
+                    
+                    # Если нет данных в БД, считаем что есть новые посты
+                    if last_date_in_db is None:
+                        print(f"✅ БД пуста для канала {channel_id}, есть новые посты")
+                        result = {
+                            "status": "success", 
+                            "has_new_posts": True,
+                            "latest_date": latest_message_date,
+                            "latest_message_id": latest_message_id
+                        }
+                        self._quick_check_cache[channel_id] = result
+                        self._quick_check_cache_time[channel_id] = now
+                        return result
+                    
+                    # Сравниваем даты
+                    if latest_message_date > last_date_in_db:
+                        print(f"✅ Найдены новые посты в канале {channel_id}: {latest_message_date} > {last_date_in_db}")
+                        result = {
+                            "status": "success", 
+                            "has_new_posts": True,
+                            "latest_date": latest_message_date,
+                            "latest_message_id": latest_message_id
+                        }
+                        self._quick_check_cache[channel_id] = result
+                        self._quick_check_cache_time[channel_id] = now
+                        return result
+                    else:
+                        print(f"📭 Новых постов нет в канале {channel_id}: {latest_message_date} <= {last_date_in_db}")
+                        result = {
+                            "status": "success", 
+                            "has_new_posts": False,
+                            "latest_date": latest_message_date,
+                            "latest_message_id": latest_message_id
+                        }
+                        self._quick_check_cache[channel_id] = result
+                        self._quick_check_cache_time[channel_id] = now
+                        return result
+                
+                # Если канал пустой
+                print(f"📭 Канал {channel_id} пустой")
+                result = {"status": "success", "has_new_posts": False}
+                self._quick_check_cache[channel_id] = result
+                self._quick_check_cache_time[channel_id] = now
+                return result
+                
+            except Exception as e:
+                print(f"❌ Ошибка получения истории чата {channel_id}: {e}")
+                result = {"status": "error", "message": f"Ошибка получения сообщений: {str(e)}"}
+                self._quick_check_cache[channel_id] = result
+                self._quick_check_cache_time[channel_id] = now
+                return result
+            
+        except Exception as e:
+            print(f"❌ Ошибка быстрой проверки канала {channel_id}: {e}")
+            result = {"status": "error", "message": f"Ошибка проверки: {str(e)}"}
+            self._quick_check_cache[channel_id] = result
+            self._quick_check_cache_time[channel_id] = now
+            return result
     
     async def parse_channel_posts(self, channel_id: str, limit: int = 50, until_date=None, offset: int = 0):
         """Парсинг постов из канала"""
@@ -1111,18 +1211,41 @@ class TelegramParser:
             print(f"❌ Ошибка при сбросе сессии: {e}")
 
     def clear_auth_cache(self):
-        """Очистить кэш авторизации и удалить файл сессии"""
+        """Очистить кэш авторизации (БЕЗ удаления файла сессии)"""
         self._auth_cache = None
         self._auth_cache_time = None
+        self._quick_check_cache.clear()
+        self._quick_check_cache_time.clear()
+        print("🗑️ Кэш авторизации и быстрых проверок очищен")
         
-        # Удаляем файл сессии для полного выхода
+        # НЕ удаляем файл сессии здесь - это должно происходить только при явном выходе
+        # Удаление файла сессии во время авторизации вызывает ошибку "readonly database"
+
+    async def logout(self):
+        """Полный выход из системы с удалением файла сессии"""
         try:
+            # Останавливаем клиент
+            await self.stop()
+            
+            # Очищаем кэш
+            self._auth_cache = None
+            self._auth_cache_time = None
+            self._quick_check_cache.clear()
+            self._quick_check_cache_time.clear()
+            
+            # Удаляем файл сессии
             session_file = f"sessions/{self.session_name}.session"
             if os.path.exists(session_file):
                 os.remove(session_file)
                 print(f"🗑️ Файл сессии удален: {session_file}")
+            
+            # Сбрасываем флаг инициализации
+            self._initialized = False
+            
+            print("✅ Полный выход из системы выполнен")
+            
         except Exception as e:
-            print(f"⚠️ Ошибка при удалении файла сессии: {e}")
+            print(f"⚠️ Ошибка при выходе из системы: {e}")
 
 # Глобальный экземпляр парсера
 telegram_parser = TelegramParser() 

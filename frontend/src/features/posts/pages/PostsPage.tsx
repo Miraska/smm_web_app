@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Grid3X3, List, LayoutList, RefreshCw, AlertCircle, Loader2, FileText, CheckCircle, Zap, Download } from 'lucide-react';
 import { usePosts } from '../../../hooks/usePosts';
 import { useAuth } from '../../../hooks/useAuth';
-import { useSelectedPosts } from '../../../hooks/useSelectedPosts';
+import { useSelectedPosts } from '../../../contexts/SelectedPostsContext';
 import { PostCard } from '../components/PostCard';
 import type { ViewMode } from '../../../types';
 
@@ -22,7 +22,7 @@ export const PostsPage: React.FC = () => {
     parseMorePosts,
     setError 
   } = usePosts();
-  const { selectedPosts, loadSelectedPosts, addSelectedPost, removeSelectedPostLocal, isPostSelected: isPostSelectedHook } = useSelectedPosts();
+  const { selectedPosts, loadSelectedPosts, addSelectedPost, removeSelectedPostLocal, isPostSelected } = useSelectedPosts();
   const [viewMode, setViewMode] = useState<ViewMode>('grid');
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [checkingNew, setCheckingNew] = useState(false);
@@ -69,12 +69,10 @@ export const PostsPage: React.FC = () => {
     }
   }, [authStatus.authorized, posts.length, handleCheckNew]);
 
-  const isPostSelected = (post: any) => {
-    return isPostSelectedHook(post.id);
-  };
+  // Используем isPostSelected из контекста напрямую
 
   const handleSelectPost = async (post: any) => {
-    const isCurrentlySelected = isPostSelected(post);
+    const isCurrentlySelected = isPostSelected(post.id);
     
     try {
       if (isCurrentlySelected) {
@@ -318,7 +316,7 @@ export const PostsPage: React.FC = () => {
                 onSelect={handleSelectPost}
                 viewMode={viewMode}
                 showSelection={true}
-                isSelected={isPostSelected(post)}
+                isSelected={isPostSelected(post.id)}
                 allPosts={posts}
               />
             ))}

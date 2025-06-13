@@ -131,13 +131,9 @@ class MultiUserTelegramManager:
             # Останавливаем парсер и удаляем из памяти
             if phone_number in self.user_parsers:
                 parser = self.user_parsers[phone_number]
-                await parser.stop()
                 
-                # Удаляем файл сессии
-                session_file = f"sessions/{parser.session_name}.session"
-                if os.path.exists(session_file):
-                    os.remove(session_file)
-                    print(f"🗑️ Файл сессии удален: {session_file}")
+                # Используем новый метод logout() вместо прямого удаления файла
+                await parser.logout()
                 
                 del self.user_parsers[phone_number]
                 print(f"✅ Парсер для пользователя {phone_number} остановлен и удален")

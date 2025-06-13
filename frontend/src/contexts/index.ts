@@ -1,1 +1,2 @@
-export { ThemeProvider, useThemeContext } from './ThemeContext'; 
+export { ThemeProvider, useTheme } from './ThemeContext';
+export { SelectedPostsProvider, useSelectedPosts } from './SelectedPostsContext'; 
